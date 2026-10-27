@@ -1,4 +1,4 @@
-import type { McpClient } from "../mcp/client.ts";
+import { isGatewayError, type McpClient } from "../mcp/client.ts";
 import { isRecord } from "../mcp/protocol.ts";
 import { addDays, formatDidaDate, localTimeZone, startOfDay } from "./dates.ts";
 import { asArray, normalizeColumn, normalizeGroup, normalizeProject, normalizeSearchHit, normalizeTag, normalizeTask, str, unwrapResult } from "./normalize.ts";
@@ -57,12 +57,23 @@ export class DidaApi {
   }
 
   /** 全部未完成任务（跨所有项目，含收件箱），一次调用，用来算项目总览的数字。 */
+  /**
+   * 全部未完成任务。任务多时一次全量查询会被网关超时（502），
+   * 这时按优先级拆成四次小查询再合并。
+   */
   async listAllUndoneTasks(): Promise<DidaTask[]> {
-    const raw = await this.client.callTool("filter_tasks", {
-      client_timezone: this.tz,
-      filter: { status: [0] }
-    });
-    return asArray(raw).map(normalizeTask);
+    const query = async (filter: Record<string, unknown>): Promise<DidaTask[]> =>
+      asArray(await this.client.callTool("filter_tasks", { client_timezone: this.tz, filter })).map(normalizeTask);
+    try {
+      return await query({ status: [0] });
+    } catch (error) {
+      if (!isGatewayError(error)) throw error;
+      const parts: DidaTask[][] = [];
+      for (const p of [0, 1, 3, 5]) parts.push(await query({ status: [0], priority: [p] }));
+      const byId = new Map<string, DidaTask>();
+      for (const t of parts.flat()) byId.set(t.id, t);
+      return Array.from(byId.values());
+    }
   }
 
   /** 过期任务：最近 90 天内排了期、截止早于今天、仍未完成的。 */

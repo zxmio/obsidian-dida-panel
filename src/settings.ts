@@ -20,7 +20,6 @@ export interface DidaSettings {
   lastProjectId: string | null;
   refreshMinutes: number;
   openOnStartup: boolean;
-  attachNoteLink: boolean;
   vaultName: string;
   hideSeparators: boolean;
   completedRange: CompletedRange;
@@ -43,7 +42,6 @@ export const DEFAULT_SETTINGS: DidaSettings = {
   lastProjectId: null,
   refreshMinutes: 5,
   openOnStartup: false,
-  attachNoteLink: true,
   vaultName: "",
   hideSeparators: true,
   completedRange: "today",
@@ -188,16 +186,6 @@ export class DidaSettingTab extends PluginSettingTab {
     );
 
     new Setting(containerEl).setName("笔记联动").setHeading();
-
-    new Setting(containerEl)
-      .setName("新建待办时附上当前笔记链接")
-      .setDesc("按工作区约定写成「正文：[相对路径](obsidian://…)」，路径整体 URL 编码。")
-      .addToggle((toggle) =>
-        toggle.setValue(this.plugin.settings.attachNoteLink).onChange(async (value) => {
-          this.plugin.settings.attachNoteLink = value;
-          await this.plugin.saveSettings();
-        })
-      );
 
     new Setting(containerEl)
       .setName("Vault 名称")

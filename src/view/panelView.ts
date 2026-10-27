@@ -11,6 +11,7 @@ import type { ProjectSnapshot } from "../store.ts";
 import { ConfirmModal } from "./confirm.ts";
 import { ProjectSuggestModal } from "./projectSuggest.ts";
 import { ChatDock } from "./chatDock.ts";
+import { QuickChips } from "./quickChips.ts";
 import type { PromptContext } from "../agent/systemPrompt.ts";
 
 export const VIEW_TYPE_DIDA = "todaylab-dida-panel";
@@ -33,8 +34,33 @@ interface TaskRenderContext {
   hideTag?: string;
 }
 
+/** 看板的一条泳道。项目列、收件箱列、今天的「过期 / 今天 / 已完成」都走它。 */
+interface LaneSpec {
+  key: string;
+  name: string;
+  tasks: DidaTask[];
+  ctx: TaskRenderContext;
+  cls?: string;
+  /** 泳道右上角的加号与底部「添加到…」 */
+  addPrefill?: Partial<TaskInput>;
+  /** 泳道头部的文字操作，比如「全部顺延」 */
+  action?: { label: string; run: () => void };
+  /** 能不能把这张卡拖进来；不给就不接受拖放 */
+  accepts?: (task: DidaTask) => boolean;
+  onDrop?: (task: DidaTask) => void;
+}
+
+/** 今天视图的看板模式记在 viewModes 的这个键下，和项目 id 不冲突。 */
+const TODAY_MODE_KEY = "__today__";
+
 export function taskWebUrl(task: DidaTask): string {
   return `https://dida365.com/webapp/#p/${task.projectId}/tasks/${task.id}`;
+}
+
+/** 「💌陪跑服务」拆成 emoji 和名称；只认开头的一个 emoji（含变体符和组合）。 */
+function splitEmoji(name: string): { emoji: string | null; name: string } {
+  const m = /^((?:\p{Extended_Pictographic}|\p{Regional_Indicator})(?:\uFE0F|\p{Emoji_Modifier}|\u200D\p{Extended_Pictographic})*)\s*/u.exec(name);
+  return m ? { emoji: m[1], name: name.slice(m[0].length) } : { emoji: null, name };
 }
 
 function stripDecor(name: string): string {
@@ -59,6 +85,9 @@ export class DidaPanelView extends ItemView {
   private listEl: HTMLElement | null = null;
   private quickValue = "";
   private quickFocused = false;
+  private quickChips: QuickChips | null = null;
+  /** 快速添加选的分组，只对选的那个项目有效；id 为 null 是「未分组」 */
+  private quickColumn: { key: string; id: string | null } | null = null;
   private dragging: DidaTask | null = null;
   private mainEl: HTMLElement | null = null;
   private dock: ChatDock | null = null;
@@ -111,9 +140,43 @@ export class DidaPanelView extends ItemView {
       }
     );
     this.dock.render();
+    this.watchStatusBar();
     this.unsubscribe = this.plugin.store.subscribe(() => this.render());
     this.render();
     await this.refresh(false);
+  }
+
+  /**
+   * Obsidian 的状态栏浮在工作区右下角，会盖住侧栏底部的输入框。
+   * 量出它和本视图重叠的高度，写进 --dida-status-gap 给底部留位。
+   */
+  private watchStatusBar(): void {
+    let frame = 0;
+    const sync = (): void => {
+      frame = 0;
+      const el = this.contentEl;
+      const bar = el.doc.body.querySelector<HTMLElement>(".status-bar");
+      let gap = 0;
+      if (bar && bar.offsetParent !== null) {
+        const a = el.getBoundingClientRect();
+        const b = bar.getBoundingClientRect();
+        if (b.left < a.right && b.right > a.left && b.top < a.bottom && b.bottom > a.top) gap = Math.ceil(a.bottom - b.top);
+      }
+      el.style.setProperty("--dida-status-gap", `${gap}px`);
+    };
+    const schedule = (): void => {
+      if (!frame) frame = window.requestAnimationFrame(sync);
+    };
+    this.registerEvent(this.app.workspace.on("resize", schedule));
+    this.registerEvent(this.app.workspace.on("layout-change", schedule));
+    this.registerEvent(this.app.workspace.on("css-change", schedule));
+    const observer = new ResizeObserver(schedule);
+    observer.observe(this.contentEl);
+    this.register(() => {
+      observer.disconnect();
+      if (frame) window.cancelAnimationFrame(frame);
+    });
+    schedule();
   }
 
   async onClose(): Promise<void> {
@@ -121,6 +184,8 @@ export class DidaPanelView extends ItemView {
     this.unsubscribe = null;
     this.dock?.destroy();
     this.dock = null;
+    this.quickChips?.destroy();
+    this.quickChips = null;
   }
 
   /** 给底部对话框的系统提示用的当前上下文。 */
@@ -248,6 +313,13 @@ export class DidaPanelView extends ItemView {
     }
   }
 
+  /** 体检的默认范围：项目详情或收件箱就审它，其他位置审全部。 */
+  reviewScope(): string | null {
+    if (this.tab === "inbox") return INBOX_ID;
+    if (this.tab === "project" && this.projectId && !this.queueMode) return this.projectId;
+    return null;
+  }
+
   private currentProjectId(): string {
     if (this.tab === "inbox") return INBOX_ID;
     if (this.tab === "project" && this.projectId) return this.projectId;
@@ -264,6 +336,8 @@ export class DidaPanelView extends ItemView {
     this.quickFocused = active instanceof HTMLInputElement && active.hasClass("dida-quick-input");
     if (this.quickFocused && active instanceof HTMLInputElement) this.quickValue = active.value;
 
+    this.quickChips?.destroy();
+    this.quickChips = null;
     root.empty();
     root.addClass("dida-panel");
     this.renderHeader(root);
@@ -272,9 +346,15 @@ export class DidaPanelView extends ItemView {
     const inProject = this.tab === "project" && !!this.projectId;
     const inQueue = this.tab === "project" && !this.projectId && this.queueMode;
     const snap = inProject ? this.plugin.store.getProject(this.projectId ?? "") : null;
-    const boardMode = inProject && !!snap?.columns.length && this.modeFor(this.projectId ?? "") === "board";
+    const inboxSnap = this.tab === "inbox" ? this.plugin.store.getProject(INBOX_ID) : null;
+    let boardMode = false;
+    if (inProject) boardMode = !!snap?.columns.length && this.modeFor(this.projectId ?? "") === "board";
+    else if (this.tab === "inbox") boardMode = !!inboxSnap?.columns.length && this.modeFor(INBOX_ID) === "board";
+    else if (this.tab === "today") boardMode = this.modeFor(TODAY_MODE_KEY) === "board";
     if (inProject) this.renderProjectHead(root, this.projectId ?? "", snap, boardMode);
     if (inQueue) this.renderQueueHead(root);
+    if (this.tab === "today") this.renderViewBar(root, TODAY_MODE_KEY, this.todaySummary(), boardMode, true);
+    if (this.tab === "inbox") this.renderViewBar(root, INBOX_ID, inboxSnap ? `${inboxSnap.tasks.length} 条待办` : "", boardMode, !!inboxSnap?.columns.length);
     if (this.tab === "search") this.renderSearchBox(root);
     else if (!(this.tab === "project" && !this.projectId)) this.renderQuickAdd(root);
 
@@ -282,8 +362,10 @@ export class DidaPanelView extends ItemView {
     if (boardMode) body.addClass("is-board");
     this.listEl = body;
     if (this.error) this.renderError(body);
-    else if (this.tab === "today") this.renderToday(body);
-    else if (this.tab === "inbox") this.renderProjectBody(body, INBOX_ID, false);
+    else if (this.tab === "today") {
+      if (boardMode) this.renderTodayBoard(body);
+      else this.renderToday(body);
+    } else if (this.tab === "inbox") this.renderProjectBody(body, INBOX_ID, boardMode);
     else if (this.tab === "project") {
       if (inQueue) this.renderQueue(body);
       else if (!this.projectId) this.renderOverview(body);
@@ -293,12 +375,14 @@ export class DidaPanelView extends ItemView {
     if (this.loading && body.childElementCount === 0) body.createDiv({ cls: "dida-loading", text: "加载中…" });
     body.scrollTop = prevScroll;
     body.scrollLeft = prevScrollLeft;
+    this.dock?.refreshContext();
   }
 
   private renderHeader(root: HTMLElement): void {
     const header = root.createDiv({ cls: "dida-header" });
     header.createSpan({ cls: "dida-header-title", text: "滴答清单" });
     const synced = this.plugin.store.lastRefreshAt ? `${relativeTime(this.plugin.store.lastRefreshAt)}同步，点击立即同步` : "立即同步";
+    this.iconButton(header, "stethoscope", "任务体检", () => this.plugin.openReview());
     this.iconButton(header, "refresh-cw", synced, () => void this.refresh(true), this.loading ? "is-loading" : "");
     this.iconButton(header, "plus", "新建待办", () => this.openCreate(), "is-accent");
     this.iconButton(header, "more-horizontal", "更多", (e) => {
@@ -352,15 +436,7 @@ export class DidaPanelView extends ItemView {
     if (group) parts.unshift(group);
     if (parts.length) text.createSpan({ cls: "dida-project-head-sub", text: parts.join(" · ") });
 
-    if (snap?.columns.length) {
-      const seg = head.createDiv({ cls: "dida-seg", attr: { role: "group", "aria-label": "显示方式" } });
-      const list = seg.createEl("button", { text: "列表", attr: { type: "button" } });
-      const board = seg.createEl("button", { text: "看板", attr: { type: "button" } });
-      list.toggleClass("is-on", !boardMode);
-      board.toggleClass("is-on", boardMode);
-      list.addEventListener("click", () => this.setMode(projectId, "list"));
-      board.addEventListener("click", () => this.setMode(projectId, "board"));
-    }
+    if (snap?.columns.length) this.renderModeSeg(head, projectId, boardMode);
 
     this.iconButton(head, "more-horizontal", "项目更多操作", (e) => {
       const menu = new Menu();
@@ -393,6 +469,33 @@ export class DidaPanelView extends ItemView {
     }
   }
 
+  /** 列表 / 看板切换 */
+  private renderModeSeg(parent: HTMLElement, key: string, boardMode: boolean): void {
+    const seg = parent.createDiv({ cls: "dida-seg", attr: { role: "group", "aria-label": "显示方式" } });
+    const list = seg.createEl("button", { text: "列表", attr: { type: "button" } });
+    const board = seg.createEl("button", { text: "看板", attr: { type: "button" } });
+    list.toggleClass("is-on", !boardMode);
+    board.toggleClass("is-on", boardMode);
+    list.addEventListener("click", () => this.setMode(key, "list"));
+    board.addEventListener("click", () => this.setMode(key, "board"));
+  }
+
+  /** 今天、收件箱页签顶部的一行：左边数字，右边列表 / 看板。 */
+  private renderViewBar(root: HTMLElement, key: string, summary: string, boardMode: boolean, canBoard: boolean): void {
+    const bar = root.createDiv({ cls: "dida-viewbar" });
+    bar.createSpan({ cls: "dida-viewbar-text", text: summary });
+    if (canBoard) this.renderModeSeg(bar, key, boardMode);
+  }
+
+  private todaySummary(): string {
+    const snap = this.plugin.store.today;
+    if (!snap) return "";
+    const parts = [`${snap.today.length} 条今天`];
+    if (snap.overdue.length) parts.unshift(`${snap.overdue.length} 条过期`);
+    if (snap.completed.length) parts.push(`${snap.completed.length} 条已完成`);
+    return parts.join(" · ");
+  }
+
   private renderQuickAdd(root: HTMLElement): void {
     const wrap = root.createDiv({ cls: "dida-quick" });
     const icon = wrap.createSpan();
@@ -400,20 +503,64 @@ export class DidaPanelView extends ItemView {
     const input = wrap.createEl("input", { type: "text", cls: "dida-quick-input", attr: { "aria-label": "快速添加待办" } });
     input.placeholder = `添加待办到「${this.plugin.store.projectName(this.currentProjectId())}」`;
     input.value = this.quickValue;
-    input.addEventListener("input", () => (this.quickValue = input.value));
+    input.title = "速记：明天 14:00 · !高 · #标签 · ^项目";
+    const chips = new QuickChips(root.createDiv({ cls: "dida-quick-chips" }), {
+      plugin: this.plugin,
+      input,
+      defaultProjectId: () => this.currentProjectId(),
+      matchProject: (q) => this.matchProject(q),
+      columns: (id) => this.quickColumns(id),
+      column: (id) => (this.quickColumn?.key === this.plugin.store.projectKey(id) ? this.quickColumn.id : undefined),
+      setColumn: (id, columnId) => {
+        this.quickColumn = columnId === undefined ? null : { key: this.plugin.store.projectKey(id), id: columnId };
+        chips.render();
+      },
+      setValue: (next, refocus) => {
+        input.value = next;
+        this.quickValue = next;
+        chips.render();
+        if (refocus) {
+          input.focus();
+          input.setSelectionRange(next.length, next.length);
+        }
+      }
+    });
+    this.quickChips = chips;
+    input.addEventListener("input", () => {
+      this.quickValue = input.value;
+      chips.render();
+    });
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.isComposing) {
         e.preventDefault();
         void this.quickAdd(input);
       }
     });
-    root.createDiv({ cls: "dida-quick-hint", text: "明天 14:00 · !高 · #标签 · ^项目" });
+    chips.render();
     if (this.quickFocused) {
       window.setTimeout(() => {
         input.focus();
         input.setSelectionRange(input.value.length, input.value.length);
       }, 0);
     }
+  }
+
+  /** 快速添加目标项目的分组；看板项目和收件箱没缓存时顺手加载，加载完面板会重画。 */
+  private quickColumns(projectId: string): DidaColumn[] | null {
+    const store = this.plugin.store;
+    const snap = store.getProject(projectId);
+    if (snap) return snap.columns;
+    const project = store.projectById(projectId);
+    if (!project || (project.viewMode !== "kanban" && store.projectKey(projectId) !== INBOX_ID)) return [];
+    void store.loadProject(projectId).catch(() => null);
+    return null;
+  }
+
+  /** 速记里的 ^项目 按名称匹配：先全等，再包含；忽略空格和 emoji。 */
+  private matchProject(query: string): DidaProject | null {
+    const q = stripDecor(query);
+    const projects = this.plugin.store.projects;
+    return projects.find((p) => stripDecor(p.name) === q) ?? projects.find((p) => stripDecor(p.name).includes(q)) ?? null;
   }
 
   private async quickAdd(input: HTMLInputElement): Promise<void> {
@@ -424,8 +571,7 @@ export class DidaPanelView extends ItemView {
     }
     let projectId = this.currentProjectId();
     if (parsed.projectQuery) {
-      const q = stripDecor(parsed.projectQuery);
-      const hit = this.plugin.store.projects.find((p) => stripDecor(p.name) === q) ?? this.plugin.store.projects.find((p) => stripDecor(p.name).includes(q));
+      const hit = this.matchProject(parsed.projectQuery);
       if (!hit) {
         new Notice(`没有找到项目「${parsed.projectQuery}」`);
         return;
@@ -439,16 +585,14 @@ export class DidaPanelView extends ItemView {
       tags: parsed.tags,
       content: ""
     };
-    const snap = this.plugin.store.getProject(projectId);
-    if (snap?.columns.length) taskInput.columnId = snap.columns[0].id;
+    const columnId = this.quickChips?.columnFor(projectId);
+    if (columnId) taskInput.columnId = columnId;
     if (parsed.date) {
       const when = formatDidaDate(parsed.date, parsed.allDay);
       taskInput.startDate = when;
       taskInput.dueDate = when;
       taskInput.isAllDay = parsed.allDay;
     }
-    const note = this.plugin.settings.attachNoteLink ? this.plugin.currentNote() : null;
-    if (note) taskInput.content = this.plugin.noteLinkContent(note);
     input.disabled = true;
     try {
       await this.plugin.store.createTask(taskInput);
@@ -568,22 +712,35 @@ export class DidaPanelView extends ItemView {
     const projects = store.projects.filter((p) => p.id !== INBOX_ID);
     if (!projects.length && !overview) return;
 
-    if (overview) {
-      body.createDiv({
-        cls: "dida-overview-summary",
-        text: `${projects.length} 个进行中项目 · ${overview.totalUndone} 条待办${overview.totalOverdue ? ` · ${overview.totalOverdue} 条过期` : ""}`
-      });
-      const queued = store.queuedTasks(this.plugin.settings.aiTag).length;
-      const row = body.createEl("button", { cls: "dida-project-row is-queue", attr: { type: "button" } });
-      const ic = row.createSpan({ cls: "dida-project-row-icon" });
-      setIcon(ic, "bot");
-      row.createSpan({ cls: "dida-project-row-name", text: "AI 队列" });
-      const n = row.createSpan({ cls: "dida-project-row-count", text: String(queued) });
-      if (!queued) n.addClass("is-zero");
-      const chev = row.createSpan({ cls: "dida-project-row-chev" });
-      setIcon(chev, "chevron-right");
-      row.addEventListener("click", () => this.showQueue());
-    }
+    if (overview) this.renderOverviewStats(body, overview.totalOverdue);
+    this.renderOverviewList(body.createDiv({ cls: "dida-ov-list" }), projects);
+  }
+
+  /** 总览顶部三张数字卡：今天、过期、AI 队列，点进对应视图。 */
+  private renderOverviewStats(body: HTMLElement, overdue: number): void {
+    const store = this.plugin.store;
+    const today = (store.overview?.tasks ?? []).filter((t) => describeDue(t).state === "today").length;
+    const queued = store.queuedTasks(this.plugin.settings.aiTag).length;
+    const stats = body.createDiv({ cls: "dida-ov-stats" });
+    const stat = (icon: string, label: string, n: number, cls: string, onClick: () => void): void => {
+      const card = stats.createEl("button", { cls: `dida-ov-stat ${cls}`, attr: { type: "button" } });
+      card.toggleClass("is-zero", !n);
+      const top = card.createDiv({ cls: "dida-ov-stat-top" });
+      setIcon(top.createSpan({ cls: "dida-ov-stat-icon" }), icon);
+      top.createSpan({ cls: "dida-ov-stat-label", text: label });
+      card.createDiv({ cls: "dida-ov-stat-num", text: String(n) });
+      card.addEventListener("click", onClick);
+    };
+    stat("sun", "今天", today, "is-today", () => this.setTab("today"));
+    stat("alarm-clock", "过期", overdue, "is-overdue", () => this.setTab("today"));
+    stat("bot", "AI 队列", queued, "is-queue", () => this.showQueue());
+  }
+
+  private renderOverviewList(list: HTMLElement, projects: DidaProject[]): void {
+    const store = this.plugin.store;
+    list.empty();
+    const inbox = store.projectById(INBOX_ID);
+    if (inbox) this.renderProjectRow(list.createDiv({ cls: "dida-ov-pinned" }), inbox);
 
     const byGroup = new Map<string, DidaProject[]>();
     for (const p of projects) {
@@ -593,33 +750,86 @@ export class DidaPanelView extends ItemView {
     const groupIds = [...store.groups.map((g) => g.id).filter((id) => byGroup.has(id)), ...(byGroup.has("__none__") ? ["__none__"] : [])];
 
     for (const gid of groupIds) {
-      const list = byGroup.get(gid) ?? [];
-      const header = body.createDiv({ cls: "dida-group is-static" });
-      header.createSpan({ text: gid === "__none__" ? "未分组" : store.groupName(gid) ?? "未分组" });
-      header.createSpan({ cls: "dida-group-count", text: String(list.length) });
-      for (const p of list) this.renderProjectRow(body, p);
-    }
-
-    const inbox = store.projectById(INBOX_ID);
-    if (inbox) {
-      const header = body.createDiv({ cls: "dida-group is-static" });
-      header.createSpan({ text: "收件箱" });
-      this.renderProjectRow(body, inbox);
+      const items = byGroup.get(gid) ?? [];
+      const key = `ov:${gid}`;
+      const open = !this.collapsed.has(key);
+      const total = items.reduce((sum, p) => sum + (store.overview?.counts.get(store.projectKey(p.id))?.undone ?? 0), 0);
+      const section = list.createDiv({ cls: "dida-ov-group" });
+      const header = section.createDiv({ cls: "dida-ov-group-head" });
+      header.toggleClass("is-collapsed", !open);
+      setIcon(header.createSpan({ cls: "dida-ov-group-chev" }), "chevron-down");
+      header.createSpan({ cls: "dida-ov-group-name", text: gid === "__none__" ? "未分组" : store.groupName(gid) ?? "未分组" });
+      header.createSpan({ cls: "dida-ov-group-meta", text: `${items.length} 个项目 · ${total} 条` });
+      header.addEventListener("click", () => {
+        if (open) this.collapsed.add(key);
+        else this.collapsed.delete(key);
+        this.renderOverviewList(list, projects);
+      });
+      if (open) for (const p of items) this.renderProjectRow(section, p);
     }
   }
 
-  private renderProjectRow(body: HTMLElement, project: DidaProject): void {
-    const count = this.plugin.store.overview?.counts.get(this.plugin.store.projectKey(project.id));
-    const row = body.createEl("button", { cls: "dida-project-row", attr: { type: "button" } });
-    const dot = row.createSpan({ cls: "dida-dot" });
-    if (project.color) dot.style.background = project.color;
-    row.createSpan({ cls: "dida-project-row-name", text: project.name });
-    if (count?.overdue) row.createSpan({ cls: "dida-project-row-overdue", text: `${count.overdue} 过期` });
-    const n = row.createSpan({ cls: "dida-project-row-count", text: String(count?.undone ?? 0) });
-    if (!count?.undone) n.addClass("is-zero");
-    const chev = row.createSpan({ cls: "dida-project-row-chev" });
-    setIcon(chev, "chevron-right");
+  /** 项目行：名称开头的 emoji 当图标，没有就用项目颜色点；悬停时数字换成「新建 / 更多」。 */
+  private renderProjectRow(parent: HTMLElement, project: DidaProject): void {
+    const store = this.plugin.store;
+    const count = store.overview?.counts.get(store.projectKey(project.id));
+    const undone = count?.undone ?? 0;
+    const row = parent.createDiv({ cls: "dida-ov-row", attr: { role: "button", tabindex: "0" } });
+    row.toggleClass("is-empty", !undone);
+    const { emoji, name } = splitEmoji(project.name);
+    const icon = row.createSpan({ cls: "dida-ov-row-icon" });
+    if (project.id === INBOX_ID) setIcon(icon, "inbox");
+    else if (emoji) icon.setText(emoji);
+    else {
+      const dot = icon.createSpan({ cls: "dida-ov-row-dot" });
+      if (project.color) dot.style.background = project.color;
+    }
+    if (emoji && project.color) {
+      // 有 emoji 的项目也保留滴答里设的颜色，画成图标下的一道细线
+      icon.addClass("has-color");
+      icon.style.setProperty("--dida-project-color", project.color);
+    }
+    row.createSpan({ cls: "dida-ov-row-name", text: name || project.name });
+
+    const meta = row.createSpan({ cls: "dida-ov-row-meta" });
+    if (count?.overdue) meta.createSpan({ cls: "dida-ov-row-overdue", text: `${count.overdue} 过期` });
+    meta.createSpan({ cls: "dida-ov-row-count", text: undone ? String(undone) : "" });
+
+    const actions = row.createSpan({ cls: "dida-ov-row-actions" });
+    const action = (ic: string, label: string, run: (e: MouseEvent) => void): void => {
+      const b = actions.createEl("button", { cls: "dida-ov-row-action", attr: { type: "button", "aria-label": label } });
+      setIcon(b, ic);
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        run(e);
+      });
+    };
+    action("plus", "新建待办到此项目", () => this.plugin.openCreateModal({ projectId: project.id }));
+    action("more-horizontal", "更多", (e) => this.projectRowMenu(project).showAtMouseEvent(e));
+
     row.addEventListener("click", () => this.showProject(project.id));
+    row.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        this.showProject(project.id);
+      }
+    });
+    row.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      this.projectRowMenu(project).showAtMouseEvent(e);
+    });
+  }
+
+  private projectRowMenu(project: DidaProject): Menu {
+    const menu = new Menu();
+    menu.addItem((i) => i.setTitle("打开").setIcon("arrow-right").onClick(() => this.showProject(project.id)));
+    menu.addItem((i) => i.setTitle("新建待办…").setIcon("plus").onClick(() => this.plugin.openCreateModal({ projectId: project.id })));
+    menu.addItem((i) => i.setTitle("在主窗格打开看板").setIcon("layout-dashboard").onClick(() => void this.plugin.openBoardInMainPane(project.id)));
+    if (project.id !== INBOX_ID) {
+      menu.addSeparator();
+      menu.addItem((i) => i.setTitle("在滴答清单网页版打开").setIcon("external-link").onClick(() => window.open(`https://dida365.com/webapp/#p/${project.id}/tasks`)));
+    }
+    return menu;
   }
 
   // ---------- 列表 ----------
@@ -675,6 +885,47 @@ export class DidaPanelView extends ItemView {
     }
   }
 
+  private renderTodayBoard(body: HTMLElement): void {
+    const snap = this.plugin.store.today;
+    if (!snap) return;
+    const sortByDue = (list: DidaTask[]): DidaTask[] =>
+      [...list].sort((a, b) => (a.dueDate ?? a.startDate ?? "").localeCompare(b.dueDate ?? b.startDate ?? ""));
+    const todayDate = startOfDay(new Date());
+    const today = formatDidaDate(todayDate, true);
+    const lanes: LaneSpec[] = [
+      {
+        key: "overdue",
+        name: "已过期",
+        cls: "is-overdue",
+        tasks: sortByDue(snap.overdue),
+        ctx: { showProject: true, card: true },
+        action: snap.overdue.length ? { label: "全部顺延", run: () => void this.rescheduleOverdue(snap.overdue) } : undefined
+      },
+      {
+        key: "today",
+        name: "今天",
+        cls: "is-today",
+        tasks: sortByDue(snap.today),
+        ctx: { showProject: true, card: true, hideTodayLabel: true },
+        addPrefill: { startDate: today, dueDate: today, isAllDay: true },
+        accepts: (t) => t.status !== 2 && describeDue(t).state !== "today",
+        onDrop: (t) => this.setDate(t, todayDate)
+      }
+    ];
+    if (this.plugin.settings.completedRange !== "none") {
+      lanes.push({
+        key: "completed",
+        name: "已完成",
+        cls: "is-done",
+        tasks: snap.completed,
+        ctx: { showProject: true, card: true },
+        accepts: (t) => t.status !== 2,
+        onDrop: (t) => void this.complete(t)
+      });
+    }
+    this.renderLanes(body, lanes);
+  }
+
   private async rescheduleOverdue(tasks: DidaTask[]): Promise<void> {
     const ok = await ConfirmModal.ask(this.app, "顺延到今天", `把 ${tasks.length} 条过期待办的日期都改到今天？时间点会清掉，改成全天。`, "顺延");
     if (!ok) return;
@@ -708,17 +959,21 @@ export class DidaPanelView extends ItemView {
     const ctx: TaskRenderContext = { showProject: false, columns: snap.columns };
     if (snap.columns.length) {
       const byColumn = this.groupByColumn(snap, tasks);
+      // 没有分组的任务和滴答一样排在最前面
+      const rest = byColumn.get("__none__") ?? [];
+      if (rest.length) {
+        const { open } = this.renderGroup(body, "col:none", "未分组", rest.length);
+        if (open) {
+          for (const t of rest) this.renderTask(body, t, ctx);
+          this.renderGhost(body, "添加到未分组", { projectId, columnId: null });
+        }
+      }
       for (const col of snap.columns) {
         const list = byColumn.get(col.id) ?? [];
         const { open } = this.renderGroup(body, `col:${col.id}`, col.name, list.length);
         if (!open) continue;
         for (const t of list) this.renderTask(body, t, ctx);
         this.renderGhost(body, `添加到${col.name}`, { projectId, columnId: col.id });
-      }
-      const rest = byColumn.get("__none__") ?? [];
-      if (rest.length) {
-        const { open } = this.renderGroup(body, "col:none", "未分列", rest.length);
-        if (open) for (const t of rest) this.renderTask(body, t, ctx);
       }
       return;
     }
@@ -741,28 +996,51 @@ export class DidaPanelView extends ItemView {
 
   private renderBoard(body: HTMLElement, projectId: string, snap: ProjectSnapshot, tasks: DidaTask[]): void {
     const byColumn = this.groupByColumn(snap, tasks);
-    const columns = [...snap.columns];
+    const ctx: TaskRenderContext = { showProject: false, columns: snap.columns, card: true };
+    const lanes: LaneSpec[] = snap.columns.map((col) => ({
+      key: col.id,
+      name: col.name,
+      tasks: byColumn.get(col.id) ?? [],
+      ctx,
+      addPrefill: { projectId, columnId: col.id },
+      accepts: (t: DidaTask) => t.columnId !== col.id,
+      onDrop: (t: DidaTask) => void this.moveToColumn(t, col)
+    }));
     const rest = byColumn.get("__none__") ?? [];
+    if (rest.length) lanes.unshift({ key: "__none__", name: "未分组", tasks: rest, ctx, addPrefill: { projectId, columnId: null } });
+    this.renderLanes(body, lanes);
+  }
 
+  /** 横向泳道 + 顶部跳转胶囊；接受拖放的泳道在卡片拖过来时高亮。 */
+  private renderLanes(body: HTMLElement, specs: LaneSpec[]): void {
+    body.addClass("is-board");
     const jump = body.createDiv({ cls: "dida-board-jump" });
     const lanes = body.createDiv({ cls: "dida-board" });
-    const laneEls = new Map<string, HTMLElement>();
 
-    const renderLane = (key: string, name: string, list: DidaTask[], col: DidaColumn | null): void => {
-      const lane = lanes.createDiv({ cls: "dida-lane" });
-      laneEls.set(key, lane);
+    for (const spec of specs) {
+      const lane = lanes.createDiv({ cls: `dida-lane ${spec.cls ?? ""}`.trim() });
       const head = lane.createDiv({ cls: "dida-lane-head" });
-      head.createSpan({ text: name });
-      head.createSpan({ cls: "dida-group-count", text: String(list.length) });
+      head.createSpan({ cls: "dida-lane-name", text: spec.name });
+      head.createSpan({ cls: "dida-group-count", text: String(spec.tasks.length) });
       head.createSpan({ cls: "dida-group-spacer" });
-      if (col) this.iconButton(head, "plus", `添加到${col.name}`, () => this.openCreate({ projectId, columnId: col.id }), "is-small");
+      if (spec.action) {
+        const act = head.createEl("button", { cls: "dida-lane-action", text: spec.action.label, attr: { type: "button" } });
+        const run = spec.action.run;
+        act.addEventListener("click", () => run());
+      }
+      const prefill = spec.addPrefill;
+      if (prefill) this.iconButton(head, "plus", `添加到${spec.name}`, () => this.openCreate(prefill), "is-small");
+
       const cards = lane.createDiv({ cls: "dida-lane-cards" });
-      for (const t of list) this.renderTask(cards, t, { showProject: false, columns: snap.columns, card: true });
-      if (col) {
-        if (!list.length) cards.createDiv({ cls: "dida-lane-empty" });
-        this.renderGhost(cards, `添加到${col.name}`, { projectId, columnId: col.id });
+      for (const t of spec.tasks) this.renderTask(cards, t, spec.ctx);
+      if (!spec.tasks.length) cards.createDiv({ cls: "dida-lane-empty" });
+      if (prefill) this.renderGhost(cards, `添加到${spec.name}`, prefill);
+
+      const accepts = spec.accepts;
+      const onDrop = spec.onDrop;
+      if (accepts && onDrop) {
         lane.addEventListener("dragover", (e) => {
-          if (!this.dragging) return;
+          if (!this.dragging || !accepts(this.dragging)) return;
           e.preventDefault();
           lane.addClass("is-over");
         });
@@ -774,21 +1052,19 @@ export class DidaPanelView extends ItemView {
           lane.removeClass("is-over");
           const task = this.dragging;
           this.dragging = null;
-          if (task && task.columnId !== col.id) void this.moveToColumn(task, col);
+          if (task && accepts(task)) onDrop(task);
         });
       }
+
       const pill = jump.createEl("button", { cls: "dida-board-jump-pill", attr: { type: "button" } });
-      pill.createSpan({ text: name });
-      pill.createSpan({ cls: "dida-group-count", text: String(list.length) });
+      pill.createSpan({ text: spec.name });
+      pill.createSpan({ cls: "dida-group-count", text: String(spec.tasks.length) });
       pill.addEventListener("click", () => {
         lane.scrollIntoView({ behavior: "smooth", inline: "start", block: "nearest" });
         jump.querySelectorAll(".dida-board-jump-pill").forEach((el) => el.removeClass("is-active"));
         pill.addClass("is-active");
       });
-    };
-
-    for (const col of columns) renderLane(col.id, col.name, byColumn.get(col.id) ?? [], col);
-    if (rest.length) renderLane("__none__", "未分列", rest, null);
+    }
     jump.querySelector(".dida-board-jump-pill")?.addClass("is-active");
   }
 
@@ -854,7 +1130,8 @@ export class DidaPanelView extends ItemView {
     if (due.label && !(ctx.hideTodayLabel && due.state === "today" && task.isAllDay !== false)) {
       meta.createSpan({ cls: `dida-due is-${due.state}`, text: due.label });
     }
-    if (ctx.showProject) meta.createSpan({ text: this.plugin.store.projectName(task.projectId) });
+    if (task.priority >= 3) meta.createSpan({ cls: `dida-prio is-${task.priority}`, text: PRIORITY_LABEL[task.priority] });
+    if (ctx.showProject) meta.createSpan({ cls: "dida-task-project", text: this.plugin.store.projectName(task.projectId) });
     if (task.status === 2 && task.completedTime) {
       const done = new Date(task.completedTime);
       if (!Number.isNaN(done.getTime())) meta.createSpan({ text: `${String(done.getHours()).padStart(2, "0")}:${String(done.getMinutes()).padStart(2, "0")} 完成` });

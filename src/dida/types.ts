@@ -53,6 +53,8 @@ export interface DidaTask {
   createdTime?: string | null;
   modifiedTime?: string | null;
   sortOrder?: number | null;
+  /** 周期任务的 RRULE；非周期任务为空 */
+  repeatFlag?: string | null;
 }
 
 export interface TaskSearchHit {

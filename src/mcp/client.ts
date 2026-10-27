@@ -9,11 +9,28 @@ export class McpAuthError extends Error {
 }
 
 export class McpError extends Error {
-  constructor(message: string) {
+  /** HTTP 状态码；不是 HTTP 层的错误时为 null */
+  readonly status: number | null;
+  constructor(message: string, status: number | null = null) {
     super(message);
     this.name = "McpError";
+    this.status = status;
   }
 }
+
+/** 网关类错误（502 / 503 / 504）多半是上游一时超时，值得重试。 */
+export function isGatewayError(error: unknown): boolean {
+  return error instanceof McpError && error.status !== null && error.status >= 502 && error.status <= 504;
+}
+
+/** 错误响应体可能是一整页 HTML，只留可读的文字。 */
+export function describeHttpError(status: number, body: string): string {
+  if (status >= 500) return `滴答清单服务暂时不可用（${status}），稍后再试`;
+  const text = body.replace(/<!--[\s\S]*?-->/g, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  return `滴答清单服务返回 ${status}${text ? `：${text.slice(0, 160)}` : ""}`;
+}
+
+const RETRY_DELAYS = [1000, 3000];
 
 class McpSessionExpired extends Error {}
 
@@ -91,7 +108,19 @@ export class McpClient {
     }
   }
 
+  /** 网关类错误按 1 秒、3 秒各重试一次。 */
   private async post(message: JsonRpcMessage, expectResponse = true): Promise<unknown> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.postOnce(message, expectResponse);
+      } catch (error) {
+        if (!isGatewayError(error) || attempt >= RETRY_DELAYS.length) throw error;
+        await new Promise((r) => window.setTimeout(r, RETRY_DELAYS[attempt]));
+      }
+    }
+  }
+
+  private async postOnce(message: JsonRpcMessage, expectResponse: boolean): Promise<unknown> {
     const token = this.opts.getToken();
     if (!token) throw new McpAuthError();
 
@@ -116,7 +145,7 @@ export class McpClient {
       throw new McpAuthError();
     }
     if (res.status === 404 && this.sessionId) throw new McpSessionExpired();
-    if (res.status >= 400) throw new McpError(`滴答清单服务返回 ${res.status}：${res.text.slice(0, 200)}`);
+    if (res.status >= 400) throw new McpError(describeHttpError(res.status, res.text), res.status);
 
     const sid = header(res.headers, "mcp-session-id");
     if (sid) this.sessionId = sid;

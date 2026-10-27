@@ -64,6 +64,7 @@ export function normalizeTask(raw: Record<string, unknown>): DidaTask {
     completedTime: str(t.completedTime),
     createdTime: str(t.createdTime),
     modifiedTime: str(t.modifiedTime),
+    repeatFlag: str(t.repeatFlag),
     sortOrder: typeof t.sortOrder === "number" ? t.sortOrder : null
   };
 }

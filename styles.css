@@ -4,8 +4,10 @@
 
 .dida-panel,
 .dida-modal,
-.dida-block {
+.dida-block,
+.dida-pop {
   --dida-accent: #c04638;
+  --dida-accent-rgb: 192, 70, 56;
   --dida-accent-strong: #a13125;
   --dida-accent-soft: #ffedea;
   --dida-accent-line: #ffdfd8;
@@ -18,8 +20,10 @@
 }
 .theme-dark .dida-panel,
 .theme-dark .dida-modal,
-.theme-dark .dida-block {
+.theme-dark .dida-block,
+.theme-dark .dida-pop {
   --dida-accent: #e8806f;
+  --dida-accent-rgb: 232, 128, 111;
   --dida-accent-strong: #f29a8b;
   --dida-accent-soft: rgba(232, 128, 111, 0.15);
   --dida-accent-line: rgba(232, 128, 111, 0.35);
@@ -46,236 +50,624 @@
   color: var(--text-normal);
 }
 
-/* ---------- 底部 AI 对话框 ---------- */
+/* ---------- 底部 AI 对话框（布局照 MakerPilot） ---------- */
 
 .dida-dock {
+  --dida-accent: #c04638;
+  --dida-accent-rgb: 192, 70, 56;
+  --dida-accent-strong: #a13125;
+  --dida-accent-soft: #ffedea;
+  --dida-line: var(--background-modifier-border);
   flex: none;
   display: flex;
   flex-direction: column;
-  border-top: 1px solid var(--dida-line);
-  background: var(--background-secondary);
+  padding: 0 12px calc(12px + var(--dida-status-gap, 0px));
   font-size: var(--font-ui-small);
   color: var(--text-normal);
-  --dida-accent: #c04638;
-  --dida-accent-strong: #a13125;
-  --dida-accent-soft: #ffedea;
-  --dida-accent-line: #ffdfd8;
-  --dida-fill: var(--background-modifier-form-field, #f4f4f5);
-  --dida-card: var(--background-primary);
-  --dida-line: var(--background-modifier-border);
-  --dida-shadow: 0 1px 2px rgba(24, 24, 27, 0.04), 0 12px 32px -20px rgba(24, 24, 27, 0.25);
 }
 .theme-dark .dida-dock {
   --dida-accent: #e8806f;
+  --dida-accent-rgb: 232, 128, 111;
   --dida-accent-strong: #f29a8b;
   --dida-accent-soft: rgba(232, 128, 111, 0.15);
-  --dida-accent-line: rgba(232, 128, 111, 0.35);
 }
-.dida-dock-bar {
+.dida-dock.is-open {
+  border-top: 1px solid var(--dida-line);
+  background: var(--background-primary);
+}
+
+/* 对话区：收起时整块隐藏 */
+.dida-chat {
+  display: none;
+  flex-direction: column;
+  min-height: 0;
+  margin: 0 -12px;
+}
+.dida-dock.is-open .dida-chat {
+  display: flex;
+}
+.dida-chat-header {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 12px 0 10px;
-  min-height: 28px;
+  min-height: 40px;
+  padding: 0 8px 0 14px;
+  border-bottom: 1px solid var(--dida-line);
 }
-.dida-dock button.dida-dock-toggle {
-  display: inline-flex;
+.dida-chat-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
   align-items: center;
-  gap: 4px;
-  height: 24px;
-  padding: 0 6px;
-  border: 0;
-  background: transparent;
-  border-radius: 6px;
-  font-size: var(--font-ui-smaller);
+  gap: 8px;
+  font-size: 13px;
   font-weight: 500;
-  color: var(--text-muted);
-  cursor: pointer;
-  box-shadow: none;
-}
-.dida-dock button.dida-dock-toggle:hover {
-  background: var(--dida-fill);
-  color: var(--text-normal);
-}
-.dida-dock button.dida-dock-toggle svg {
-  width: 12px;
-  height: 12px;
-}
-.dida-dock-status {
-  font-size: var(--font-ui-smaller);
-  color: var(--text-faint);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  min-width: 0;
 }
-.dida-dock button.dida-dock-reset {
-  height: 24px;
-  padding: 0 8px;
-  border: 0;
-  background: transparent;
-  font-size: var(--font-ui-smaller);
-  color: var(--text-faint);
-  cursor: pointer;
-  box-shadow: none;
-  border-radius: 6px;
+.dida-chat-title::before {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--dida-accent);
 }
-.dida-dock button.dida-dock-reset:hover {
-  color: var(--text-normal);
-  background: var(--dida-fill);
+.dida-chat-title.is-live::before {
+  animation: dida-pulse 1.2s ease-in-out infinite;
 }
-.dida-dock-log {
-  display: none;
-  flex-direction: column;
-  gap: 8px;
-  max-height: 320px;
-  overflow: auto;
-  padding: 8px 12px 4px;
-}
-.dida-dock-log.is-open {
+.dida-chat-actions {
   display: flex;
-}
-.dida-dock-log:empty {
-  display: none;
-}
-.dida-msg {
-  border-radius: 12px;
-  padding: 8px 12px;
-  line-height: 1.55;
-  max-width: 100%;
-}
-.dida-msg.is-user {
-  align-self: flex-end;
-  background: var(--dida-accent-soft);
-  color: var(--text-normal);
-  max-width: 88%;
-  white-space: pre-wrap;
-}
-.dida-msg.is-ai {
-  align-self: stretch;
-  background: var(--dida-card);
-  box-shadow: var(--dida-shadow);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.dida-msg-body {
-  white-space: pre-wrap;
-}
-.dida-msg-body p {
-  margin: 0 0 6px;
-}
-.dida-msg-body p:last-child {
-  margin-bottom: 0;
-}
-.dida-msg-body ul,
-.dida-msg-body ol {
-  margin: 4px 0;
-  padding-left: 18px;
-}
-.dida-msg-steps {
-  display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 2px;
 }
-.dida-msg-steps:empty {
-  display: none;
-}
-.dida-step {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--font-ui-smaller);
-  color: var(--text-faint);
-}
-.dida-step.is-done {
-  color: var(--text-muted);
-}
-.dida-step.is-error {
-  color: var(--text-error);
-}
-.dida-step-icon {
-  display: inline-flex;
-  width: 12px;
-  height: 12px;
-}
-.dida-step-icon svg {
-  width: 12px;
-  height: 12px;
-}
-.dida-step.is-running .dida-step-icon svg {
-  animation: dida-spin 1s linear infinite;
-}
-.dida-step-detail {
-  color: var(--text-faint);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.dida-msg-error {
-  font-size: var(--font-ui-smaller);
-  color: var(--text-error);
-}
-.dida-dock-input {
-  display: flex;
-  align-items: flex-end;
-  gap: 8px;
-  padding: 8px 12px 12px;
-}
-.dida-dock textarea.dida-dock-textarea {
-  flex: 1;
-  min-height: 36px;
-  max-height: 140px;
-  resize: none;
-  border: 1px solid transparent;
-  border-radius: 10px;
-  background: var(--dida-fill);
-  padding: 8px 12px;
-  font-family: inherit;
-  font-size: var(--font-ui-small);
-  line-height: 1.45;
-  color: var(--text-normal);
-  box-shadow: none;
-}
-.dida-dock textarea.dida-dock-textarea:focus {
-  background: var(--dida-card);
-  border-color: color-mix(in srgb, var(--dida-accent) 50%, transparent);
-  box-shadow: none;
-}
-.dida-dock textarea.dida-dock-textarea::placeholder {
-  color: var(--text-faint);
-}
-.dida-dock textarea.dida-dock-textarea:disabled {
-  opacity: 0.6;
-}
-.dida-dock button.dida-dock-send {
-  width: 36px;
-  height: 36px;
-  flex: none;
-  border: 0;
-  border-radius: 10px;
-  background: var(--dida-accent);
-  color: #fff;
+.dida-dock button.dida-chat-nav-btn,
+.dida-dock button.dida-toolbar-btn {
+  appearance: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
-  box-shadow: none;
+  width: 30px;
+  height: 30px;
   padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  cursor: pointer;
 }
-.dida-dock button.dida-dock-send:hover {
-  background: var(--dida-accent-strong);
+.dida-dock button.dida-chat-nav-btn:hover,
+.dida-dock button.dida-toolbar-btn:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
 }
-.dida-dock button.dida-dock-send:disabled {
-  background: var(--text-faint);
-  cursor: default;
-}
-.dida-dock button.dida-dock-send.is-running {
-  background: var(--text-muted);
-}
-.dida-dock button.dida-dock-send svg {
+.dida-dock button.dida-chat-nav-btn svg,
+.dida-dock button.dida-toolbar-btn svg {
   width: 16px;
   height: 16px;
+}
+.dida-chat-messages {
+  max-height: min(440px, 52vh);
+  min-height: 160px;
+  overflow-y: auto;
+  padding: 12px 12px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* 空对话 */
+.dida-chat-welcome {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 16px 4px;
+  text-align: center;
+}
+.dida-chat-welcome-text {
+  font-family: Copernicus, "Tiempos Headline", Georgia, "Songti SC", serif;
+  font-size: 22px;
+  font-weight: 300;
+  color: var(--text-muted);
+  letter-spacing: -0.01em;
+}
+.dida-chat-starters {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  width: min(320px, 100%);
+}
+.dida-dock button.dida-chat-starter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: auto;
+  min-height: 34px;
+  padding: 7px 12px;
+  border: 1px solid var(--dida-line);
+  border-radius: 10px;
+  background: var(--background-primary);
+  box-shadow: none;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  text-align: left;
+  white-space: normal;
+  cursor: pointer;
+}
+.dida-dock button.dida-chat-starter:hover {
+  border-color: rgba(var(--dida-accent-rgb), 0.45);
+  color: var(--text-normal);
+}
+.dida-dock button.dida-chat-starter.is-review {
+  border-color: rgba(var(--dida-accent-rgb), 0.3);
+  background: var(--dida-accent-soft);
+  color: var(--dida-accent-strong);
+}
+.dida-dock button.dida-chat-starter svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* 消息 */
+.dida-chat-msg {
+  overflow-wrap: anywhere;
+}
+.dida-chat-msg.is-user {
+  align-self: flex-end;
+  max-width: 92%;
+}
+.dida-chat-bubble {
+  padding: 9px 13px;
+  border-radius: 14px;
+  background: rgba(var(--mono-rgb-100), 0.06);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  user-select: text;
+}
+.dida-chat-msg.is-ai {
+  align-self: stretch;
+  padding: 0 2px;
+}
+.dida-chat-text {
+  font-size: 13.5px;
+  line-height: 1.7;
+  user-select: text;
+}
+/* 流式输出时还是纯文本，保留换行；结束后换成 Markdown 渲染，空白按正常排版，
+   否则元素之间的换行符会被当成空行，列表项之间隔出一大截 */
+.dida-chat-text.is-streaming {
+  white-space: pre-wrap;
+}
+.dida-chat-text:empty {
+  display: none;
+}
+.dida-chat-text > :first-child {
+  margin-top: 0;
+}
+.dida-chat-text > :last-child {
+  margin-bottom: 0;
+}
+.dida-chat-text p {
+  margin: 0 0 10px;
+}
+.dida-chat-text h1,
+.dida-chat-text h2,
+.dida-chat-text h3,
+.dida-chat-text h4,
+.dida-chat-text h5,
+.dida-chat-text h6 {
+  margin: 16px 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.45;
+  color: var(--text-normal);
+}
+.dida-chat-text h1,
+.dida-chat-text h2 {
+  font-size: 15px;
+}
+.dida-chat-text strong {
+  font-weight: 600;
+  color: var(--text-normal);
+}
+.dida-chat-text ul,
+.dida-chat-text ol {
+  margin: 2px 0 10px;
+  padding-left: 1.4em;
+}
+.dida-chat-text li {
+  margin: 0 0 4px;
+  padding-left: 2px;
+}
+.dida-chat-text li > p {
+  margin: 0;
+}
+.dida-chat-text li > ul,
+.dida-chat-text li > ol {
+  margin: 4px 0 0;
+}
+.dida-chat-text li::marker {
+  color: var(--text-faint);
+}
+.dida-chat-text ol > li::marker {
+  font-variant-numeric: tabular-nums;
+  font-size: 12.5px;
+}
+.dida-chat-text code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(var(--mono-rgb-100), 0.06);
+  font-size: 0.9em;
+}
+.dida-chat-text pre {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(var(--mono-rgb-100), 0.05);
+  overflow-x: auto;
+}
+.dida-chat-text pre code {
+  padding: 0;
+  background: none;
+}
+.dida-chat-text blockquote {
+  margin: 0 0 10px;
+  padding: 2px 0 2px 12px;
+  border-left: 3px solid var(--dida-line);
+  color: var(--text-muted);
+}
+.dida-chat-text hr {
+  margin: 14px 0;
+  border: 0;
+  border-top: 1px solid var(--dida-line);
+}
+.dida-chat-text table {
+  width: 100%;
+  margin: 0 0 10px;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.dida-chat-text th,
+.dida-chat-text td {
+  padding: 5px 8px;
+  border: 1px solid var(--dida-line);
+  text-align: left;
+  vertical-align: top;
+}
+.dida-chat-text th {
+  background: rgba(var(--mono-rgb-100), 0.04);
+  font-weight: 600;
+}
+.dida-chat-text a {
+  color: var(--dida-accent-strong);
+  text-decoration: none;
+}
+.dida-chat-text a:hover {
+  text-decoration: underline;
+}
+.dida-chat-thinking {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+}
+.dida-chat-thinking::after {
+  content: "…";
+  animation: dida-pulse 1.2s ease-in-out infinite;
+}
+.dida-chat-error {
+  margin-top: 6px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-error);
+}
+
+/* 执行步骤卡片 */
+.dida-work {
+  display: none;
+  margin-bottom: 10px;
+  border: 1px solid var(--dida-line);
+  border-radius: 12px;
+  background: var(--background-primary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+.dida-work.has-steps {
+  display: block;
+}
+.dida-dock button.dida-work-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 40px;
+  height: auto;
+  margin: 0;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-normal);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.dida-dock button.dida-work-header::after {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin: 0 4px 0 auto;
+  border-right: 1.5px solid var(--text-faint);
+  border-bottom: 1.5px solid var(--text-faint);
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform 0.15s ease;
+}
+.dida-work.is-collapsed button.dida-work-header::after {
+  transform: rotate(-45deg);
+}
+.dida-work-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  background: rgba(var(--dida-accent-rgb), 0.12);
+  color: var(--dida-accent);
+}
+.dida-work-icon svg {
+  width: 13px;
+  height: 13px;
+}
+.dida-work-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dida-work-count {
+  flex: none;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+.dida-work-history {
+  position: relative;
+  padding: 10px 12px 8px;
+  border-top: 1px solid var(--dida-line);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dida-work.is-collapsed .dida-work-history {
+  display: none;
+}
+/* 时间线竖线穿过节点中心：12px 内边距 + 半个 18px 节点 */
+.dida-work-history::before {
+  content: "";
+  position: absolute;
+  top: 18px;
+  bottom: 18px;
+  left: 21px;
+  width: 1px;
+  background: var(--dida-line);
+}
+.dida-work-step {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+.dida-work-node {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--dida-line);
+  background: var(--background-primary);
+  color: var(--text-faint);
+}
+.dida-work-node svg {
+  width: 11px;
+  height: 11px;
+}
+.dida-work-step.is-running .dida-work-node {
+  color: var(--dida-accent);
+  border-color: rgba(var(--dida-accent-rgb), 0.45);
+}
+.dida-work-step.is-running .dida-work-node svg {
+  animation: dida-spin 1s linear infinite;
+}
+.dida-work-step.is-done .dida-work-node {
+  color: var(--color-green);
+}
+.dida-work-step.is-error {
+  color: var(--text-error);
+}
+.dida-work-step.is-error .dida-work-node {
+  color: var(--text-error);
+  border-color: var(--text-error);
+}
+.dida-work-step-label {
+  min-width: 0;
+  flex: 1;
+}
+.dida-work-step-detail {
+  flex-basis: 100%;
+  padding-left: 26px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dida-work-note {
+  padding-left: 26px;
+  font-size: var(--font-ui-smaller);
+  line-height: 1.6;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+}
+.dida-work-note.is-status {
+  color: var(--text-faint);
+}
+
+/* 输入框 */
+.dida-composer {
+  padding-top: 10px;
+}
+.dida-composer-notice {
+  display: none;
+  margin: 0 2px 6px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+}
+.dida-composer-notice.is-visible {
+  display: block;
+}
+.dida-input-wrapper {
+  --dida-input-lift: 0 2px 10px rgb(0 0 0 / 6%);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--dida-line);
+  border-radius: 14px;
+  background-color: rgba(var(--mono-rgb-100), 0.035);
+  box-shadow: var(--dida-input-lift);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.dida-input-wrapper:focus-within {
+  border-color: rgba(var(--dida-accent-rgb), 0.55);
+  box-shadow: 0 0 0 3px rgba(var(--dida-accent-rgb), 0.12), var(--dida-input-lift);
+}
+.dida-dock textarea.dida-input {
+  width: 100%;
+  min-height: 40px;
+  max-height: 160px;
+  resize: none;
+  margin: 0;
+  padding: 10px 12px 2px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  font-family: inherit;
+  font-size: var(--font-ui-small);
+  line-height: 1.5;
+  color: var(--text-normal);
+}
+.dida-dock textarea.dida-input:focus,
+.dida-dock textarea.dida-input:hover {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.dida-dock textarea.dida-input::placeholder {
+  color: var(--text-faint);
+}
+.dida-dock textarea.dida-input:disabled {
+  opacity: 0.6;
+}
+.dida-input-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  padding: 4px 6px 6px;
+}
+.dida-input-toolbar-spacer {
+  flex: 1;
+}
+.dida-scope-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 70%;
+  height: 24px;
+  padding: 0 8px 0 6px;
+  border-radius: 999px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+.dida-scope-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--text-faint);
+}
+.dida-scope-icon svg {
+  width: 13px;
+  height: 13px;
+}
+.dida-scope-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dida-dock button.dida-toolbar-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+.dida-dock button.dida-toolbar-btn.is-on {
+  color: var(--dida-accent);
+}
+.dida-dock button.dida-send-btn {
+  appearance: none;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-left: 6px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--dida-accent);
+  box-shadow: none;
+  color: var(--background-primary);
+  cursor: pointer;
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+.dida-dock button.dida-send-btn:hover {
+  opacity: 0.85;
+}
+.dida-dock button.dida-send-btn svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 2.4;
+}
+.dida-input-wrapper.is-empty button.dida-send-btn:not(.is-stop),
+.dida-dock button.dida-send-btn:disabled {
+  background: var(--background-modifier-border);
+  color: var(--text-faint);
+}
+.dida-dock button.dida-send-btn.is-stop {
+  background: var(--text-normal);
+  color: var(--background-primary);
+}
+.dida-dock button.dida-send-btn.is-stop svg {
+  width: 11px;
+  height: 11px;
+  fill: currentColor;
+}
+
+@keyframes dida-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
 }
 
 .dida-header {
@@ -394,7 +786,8 @@
   gap: 2px;
   flex: none;
 }
-.dida-panel .dida-seg button {
+.dida-panel .dida-seg button,
+.dida-modal .dida-seg button {
   height: 24px;
   padding: 0 10px;
   border: 0;
@@ -406,84 +799,285 @@
   cursor: pointer;
   box-shadow: none;
 }
-.dida-panel .dida-seg button.is-on {
+.dida-panel .dida-seg button.is-on,
+.dida-modal .dida-seg button.is-on {
   background: var(--dida-card);
   color: var(--text-normal);
   box-shadow: 0 1px 2px rgba(24, 24, 27, 0.06);
 }
 
-/* 项目总览 */
-.dida-overview-summary {
-  padding: 0 10px 10px;
-  font-size: var(--font-ui-smaller);
-  color: var(--text-faint);
-}
-.dida-group.is-static {
-  cursor: default;
-}
-.dida-project-row + .dida-group {
-  padding-top: 18px;
-}
-.dida-panel button.dida-project-row {
+/* 今天、收件箱顶部：数字 + 列表/看板 */
+.dida-viewbar {
+  margin: 12px 16px 0 18px;
   display: flex;
   align-items: center;
-  gap: 10px;
-  width: 100%;
-  height: 44px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: 10px;
-  background: transparent;
-  box-shadow: none;
-  font-size: var(--font-ui-small);
-  color: var(--text-normal);
-  text-align: left;
-  cursor: pointer;
+  gap: 8px;
+  min-height: 28px;
 }
-.dida-panel button.dida-project-row:hover {
-  background: var(--dida-card);
-  box-shadow: var(--dida-shadow);
-}
-.dida-project-row .dida-dot {
-  width: 8px;
-  height: 8px;
-}
-.dida-project-row-name {
+.dida-viewbar-text {
   flex: 1;
   min-width: 0;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.dida-project-row-overdue {
-  font-size: var(--font-ui-smaller);
-  color: var(--dida-accent-strong);
-  font-weight: 500;
+
+/* 项目总览：三张数字卡 + 可折叠分组；行参考 Notion 侧栏，悬停浅灰底，数字换成操作按钮 */
+.dida-ov-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 14px;
 }
-.dida-project-row-count {
-  font-size: var(--font-ui-smaller);
+.dida-panel button.dida-ov-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  height: auto;
+  min-width: 0;
+  padding: 10px 11px 9px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--dida-card);
+  box-shadow: var(--dida-card-ring);
+  text-align: left;
+  cursor: pointer;
+  transition: box-shadow 0.12s ease, transform 0.12s ease;
+}
+.dida-panel button.dida-ov-stat:hover {
+  box-shadow: var(--dida-card-ring-hover);
+  transform: translateY(-1px);
+}
+.dida-ov-stat-top {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  font-size: 12px;
   color: var(--text-muted);
+}
+.dida-ov-stat-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dida-ov-stat-icon {
+  display: inline-flex;
+  flex: none;
+}
+.dida-ov-stat-icon svg {
+  width: 13px;
+  height: 13px;
+}
+.dida-ov-stat-num {
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1;
   font-variant-numeric: tabular-nums;
+  color: var(--text-normal);
 }
-.dida-project-row-count.is-zero {
-  color: var(--text-faint);
+.dida-ov-stat.is-today .dida-ov-stat-icon {
+  color: rgb(68, 131, 97);
 }
-.dida-project-row-chev {
-  display: inline-flex;
-  color: var(--text-faint);
+.dida-ov-stat.is-overdue .dida-ov-stat-icon,
+.dida-ov-stat.is-overdue:not(.is-zero) .dida-ov-stat-num {
+  color: rgb(212, 76, 71);
 }
-.dida-panel button.dida-project-row.is-queue {
-  margin-bottom: 10px;
-}
-.dida-project-row-icon {
-  display: inline-flex;
+.dida-ov-stat.is-queue .dida-ov-stat-icon {
   color: var(--dida-accent);
-  width: 8px;
-  justify-content: center;
 }
-.dida-project-row-icon svg {
+.dida-ov-stat.is-zero .dida-ov-stat-num {
+  color: var(--text-faint);
+}
+.theme-dark .dida-ov-stat.is-overdue .dida-ov-stat-icon,
+.theme-dark .dida-ov-stat.is-overdue:not(.is-zero) .dida-ov-stat-num {
+  color: #f08b80;
+}
+
+.dida-ov-pinned {
+  margin-bottom: 6px;
+}
+.dida-ov-group + .dida-ov-group,
+.dida-ov-pinned + .dida-ov-group {
+  margin-top: 10px;
+}
+.dida-ov-group-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 6px 0 4px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+.dida-ov-group-head:hover {
+  background: var(--dida-hover-soft);
+}
+.dida-ov-group-chev {
+  display: inline-flex;
+  color: var(--text-faint);
+  transition: transform 0.15s ease;
+}
+.dida-ov-group-head.is-collapsed .dida-ov-group-chev {
+  transform: rotate(-90deg);
+}
+.dida-ov-group-chev svg {
+  width: 13px;
+  height: 13px;
+}
+.dida-ov-group-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dida-ov-group-meta {
+  margin-left: auto;
+  flex: none;
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--text-faint);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.dida-ov-group-head:hover .dida-ov-group-meta,
+.dida-ov-group-head.is-collapsed .dida-ov-group-meta {
+  opacity: 1;
+}
+
+.dida-ov-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+  padding: 0 8px 0 10px;
+  border-radius: 8px;
+  font-size: var(--font-ui-small);
+  color: var(--text-normal);
+  cursor: pointer;
+  outline: none;
+}
+.dida-ov-row:hover,
+.dida-ov-row:focus-visible {
+  background: var(--dida-hover);
+}
+.dida-ov-row:focus-visible {
+  box-shadow: inset 0 0 0 1px rgba(var(--dida-accent-rgb), 0.45);
+}
+.dida-ov-row-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--text-muted);
+}
+.dida-ov-row-icon svg {
   width: 16px;
   height: 16px;
+}
+.dida-ov-row-icon.has-color::after {
+  content: "";
+  position: absolute;
+  right: -2px;
+  bottom: -1px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--dida-project-color);
+  box-shadow: 0 0 0 1.5px var(--background-primary);
+}
+.dida-ov-row-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  opacity: 0.7;
+}
+.dida-ov-row-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dida-ov-row.is-empty .dida-ov-row-name {
+  color: var(--text-muted);
+}
+.dida-ov-row-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.dida-ov-row-overdue {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgb(255, 226, 221);
+  font-size: 11px;
+  font-weight: 500;
+  color: rgb(93, 23, 21);
+}
+.theme-dark .dida-ov-row-overdue {
+  background: rgba(190, 82, 65, 0.35);
+  color: #ffc9c0;
+}
+.dida-ov-row-count {
+  min-width: 16px;
+  text-align: right;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+}
+.dida-ov-row-actions {
+  display: none;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+  margin-right: -4px;
+}
+.dida-ov-row:hover .dida-ov-row-count {
+  display: none;
+}
+.dida-ov-row:hover .dida-ov-row-actions {
+  display: inline-flex;
+}
+.dida-panel button.dida-ov-row-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.dida-panel button.dida-ov-row-action:hover {
+  background: rgba(55, 53, 47, 0.1);
+  color: var(--text-normal);
+}
+.theme-dark .dida-panel button.dida-ov-row-action:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.dida-ov-row-action svg {
+  width: 15px;
+  height: 15px;
 }
 .dida-tag.is-queue {
   background: var(--dida-accent-soft);
@@ -502,10 +1096,6 @@
 .dida-setting-stack .setting-item-control {
   justify-content: flex-start;
   margin-top: 8px;
-}
-.dida-project-row-chev svg {
-  width: 14px;
-  height: 14px;
 }
 .dida-dot {
   width: 6px;
@@ -543,7 +1133,7 @@
   color: var(--dida-accent-strong);
 }
 
-/* 快速添加：填充式，聚焦才露语法提示 */
+/* 快速添加：填充式输入框 + 下方快捷按钮 */
 .dida-quick {
   margin: 12px 16px 0;
   position: relative;
@@ -580,14 +1170,425 @@
   border-color: color-mix(in srgb, var(--dida-accent) 50%, transparent);
   box-shadow: none;
 }
-.dida-quick-hint {
-  display: none;
-  margin: 6px 18px 0;
-  font-size: var(--font-ui-smaller);
+/* 快速添加下的快捷按钮：像 Notion 的属性按钮，未设置时灰字，设置后显示具体值，悬停露出清除 */
+.dida-quick-chips {
+  margin: 6px 12px 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+.dida-panel button.dida-qchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  height: 24px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  font-size: 12px;
+  color: var(--text-faint);
+  cursor: pointer;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+.dida-panel button.dida-qchip:hover,
+.dida-panel button.dida-qchip.is-open {
+  background: var(--dida-hover);
+  color: var(--text-muted);
+}
+.dida-panel button.dida-qchip.is-set {
+  background: var(--dida-hover);
+  color: var(--text-normal);
+}
+.dida-panel button.dida-qchip.is-set.is-open {
+  box-shadow: inset 0 0 0 1px var(--dida-line);
+}
+.dida-panel button.dida-qchip.is-today .dida-qchip-icon {
+  color: rgb(68, 131, 97);
+}
+.dida-panel button.dida-qchip.is-overdue {
+  color: var(--text-error);
+}
+.dida-panel button.dida-qchip.is-prio-5 {
+  background: rgb(255, 226, 221);
+  color: rgb(93, 23, 21);
+}
+.dida-panel button.dida-qchip.is-prio-3 {
+  background: rgb(250, 222, 201);
+  color: rgb(73, 41, 14);
+}
+.dida-panel button.dida-qchip.is-prio-1 .dida-qchip-icon {
+  color: rgb(51, 126, 169);
+}
+.theme-dark .dida-panel button.dida-qchip.is-prio-5 {
+  background: rgba(190, 82, 65, 0.35);
+  color: #ffc9c0;
+}
+.theme-dark .dida-panel button.dida-qchip.is-prio-3 {
+  background: rgba(196, 110, 46, 0.32);
+  color: #f6cfa6;
+}
+.theme-dark .dida-panel button.dida-qchip.is-today .dida-qchip-icon {
+  color: rgb(82, 158, 114);
+}
+.dida-panel button.dida-qchip.is-missing {
+  color: var(--text-error);
+}
+.dida-qchip-icon {
+  display: inline-flex;
+  flex: none;
+}
+.dida-qchip-icon svg {
+  width: 13px;
+  height: 13px;
+}
+.dida-qchip-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 清除按钮平时收起，悬停时展开，不撑开按钮宽度造成跳动太大 */
+.dida-qchip-clear {
+  display: inline-flex;
+  flex: none;
+  width: 0;
+  margin-left: -4px;
+  overflow: hidden;
+  border-radius: 4px;
+  opacity: 0;
+  color: inherit;
+  transition: width 0.12s ease, margin 0.12s ease, opacity 0.12s ease;
+}
+.dida-qchip:hover .dida-qchip-clear {
+  width: 16px;
+  margin-left: 0;
+  margin-right: -4px;
+  opacity: 0.55;
+}
+.dida-qchip .dida-qchip-clear:hover {
+  opacity: 1;
+  background: rgba(55, 53, 47, 0.1);
+}
+.theme-dark .dida-qchip .dida-qchip-clear:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+.dida-qchip-clear svg {
+  width: 12px;
+  height: 12px;
+  margin: 2px;
+}
+
+/* 快捷按钮的弹出面板：挂在 body 上，Notion 菜单的阴影与行高 */
+.dida-pop {
+  position: fixed;
+  z-index: var(--layer-menu, 65);
+  width: 252px;
+  max-height: min(540px, calc(100vh - 16px));
+  display: flex;
+  flex-direction: column;
+  background: var(--background-primary);
+  border-radius: 10px;
+  box-shadow: rgba(15, 15, 15, 0.05) 0 0 0 1px, rgba(15, 15, 15, 0.1) 0 3px 6px, rgba(15, 15, 15, 0.2) 0 9px 24px;
+  font-size: 13px;
+  color: var(--text-normal);
+  outline: none;
+  overflow: hidden;
+  animation: dida-pop-in 0.12s ease-out;
+}
+.theme-dark .dida-pop {
+  background: var(--background-secondary);
+  box-shadow: rgba(255, 255, 255, 0.09) 0 0 0 1px, rgba(0, 0, 0, 0.3) 0 3px 6px, rgba(0, 0, 0, 0.45) 0 9px 24px;
+}
+.dida-pop.is-priority {
+  width: 200px;
+}
+.dida-pop.is-project {
+  width: 272px;
+}
+@keyframes dida-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+.dida-pop-search {
+  position: relative;
+  flex: none;
+  padding: 8px 8px 4px;
+}
+.dida-pop-search-icon {
+  position: absolute;
+  left: 17px;
+  top: 15px;
+  display: flex;
+  color: var(--text-faint);
+  pointer-events: none;
+}
+.dida-pop-search-icon svg {
+  width: 14px;
+  height: 14px;
+}
+.dida-pop .dida-pop-search input {
+  width: 100%;
+  height: 30px;
+  box-sizing: border-box;
+  padding: 0 8px 0 28px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--dida-hover);
+  box-shadow: inset 0 0 0 1px var(--dida-line);
+  font-size: 13px;
+  color: var(--text-normal);
+}
+.dida-pop .dida-pop-search input:focus {
+  box-shadow: inset 0 0 0 1px rgba(var(--dida-accent-rgb), 0.5), 0 0 0 3px rgba(var(--dida-accent-rgb), 0.12);
+}
+.dida-pop-body {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+.dida-pop-section {
+  padding: 4px;
+}
+.dida-pop-section + .dida-pop-section {
+  border-top: 1px solid var(--dida-line);
+}
+.dida-pop-section.is-scroll {
+  max-height: 280px;
+  overflow-y: auto;
+}
+.dida-pop-title {
+  padding: 6px 8px 4px;
+  font-size: 11px;
+  font-weight: 500;
   color: var(--text-faint);
 }
-.dida-quick:focus-within + .dida-quick-hint {
-  display: block;
+.dida-pop-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.dida-pop-item.is-active {
+  background: var(--dida-hover);
+}
+.dida-pop-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--text-muted);
+}
+.dida-pop-icon svg {
+  width: 15px;
+  height: 15px;
+}
+.dida-pop-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin: 0 3px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  opacity: 0.85;
+}
+.dida-pop-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 15px;
+  height: 15px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--dida-box);
+  border-radius: 4px;
+  color: #fff;
+}
+.dida-pop-item.is-checked .dida-pop-box {
+  border-color: var(--dida-accent);
+  background: var(--dida-accent);
+}
+.dida-pop-box svg {
+  width: 11px;
+  height: 11px;
+  stroke-width: 3;
+}
+.dida-pop-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dida-pop-hint {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.dida-pop-check {
+  display: inline-flex;
+  flex: none;
+  color: var(--dida-accent);
+}
+.dida-pop-check svg {
+  width: 14px;
+  height: 14px;
+}
+.dida-pop-item.is-muted,
+.dida-pop-item.is-muted .dida-pop-icon {
+  color: var(--text-muted);
+}
+.dida-pop-item.is-create .dida-pop-icon {
+  color: var(--dida-accent);
+}
+.dida-pop-item.is-prio-5 .dida-pop-icon {
+  color: rgb(212, 76, 71);
+}
+.dida-pop-item.is-prio-3 .dida-pop-icon {
+  color: rgb(217, 115, 13);
+}
+.dida-pop-item.is-prio-1 .dida-pop-icon {
+  color: rgb(51, 126, 169);
+}
+.dida-pop-item.is-prio-0 .dida-pop-icon {
+  color: var(--text-faint);
+}
+.dida-pop-empty {
+  padding: 10px 8px;
+  font-size: 12px;
+  color: var(--text-faint);
+  text-align: center;
+}
+
+/* 日历：周一开头，固定 6 行 */
+.dida-cal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 4px 4px 8px;
+}
+.dida-cal-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+.dida-cal-nav {
+  display: flex;
+  gap: 2px;
+}
+.dida-pop button.dida-cal-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  box-shadow: none;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.dida-pop button.dida-cal-btn:hover {
+  background: var(--dida-hover);
+  color: var(--text-normal);
+}
+.dida-cal-btn svg {
+  width: 14px;
+  height: 14px;
+}
+.dida-cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 1px;
+  padding: 0 2px 2px;
+}
+.dida-cal-wd {
+  height: 22px;
+  line-height: 22px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.dida-pop button.dida-cal-day {
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-normal);
+  cursor: pointer;
+}
+.dida-pop button.dida-cal-day:hover {
+  background: var(--dida-hover);
+}
+.dida-pop button.dida-cal-day.is-outside,
+.dida-pop button.dida-cal-day.is-past {
+  color: var(--text-faint);
+}
+.dida-pop button.dida-cal-day.is-today {
+  color: var(--dida-accent);
+  font-weight: 600;
+}
+.dida-pop button.dida-cal-day.is-selected {
+  background: var(--dida-accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+/* 时间：常用时刻一排小按钮 + 自定义 */
+.dida-pop-times {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  padding: 0 4px 4px;
+}
+.dida-pop button.dida-pop-time,
+.dida-pop input.dida-pop-time-input {
+  height: 26px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--dida-hover);
+  box-shadow: none;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.dida-pop input.dida-pop-time-input {
+  grid-column: span 2;
+  width: 100%;
+  box-sizing: border-box;
+  cursor: text;
+}
+.dida-pop button.dida-pop-time:hover {
+  color: var(--text-normal);
+  background: rgba(55, 53, 47, 0.1);
+}
+.theme-dark .dida-pop button.dida-pop-time:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.dida-pop button.dida-pop-time.is-active,
+.dida-pop input.dida-pop-time-input.is-active {
+  background: var(--dida-accent-soft);
+  color: var(--dida-accent-strong);
+  font-weight: 500;
 }
 
 /* ---------- 列表 ---------- */
@@ -647,77 +1648,98 @@
   color: var(--dida-accent-strong);
 }
 
+/* ---------- 任务行（参考 Notion：平铺行，悬停只铺浅灰底；方形勾选框；属性一行小字） ---------- */
+
+.dida-panel,
+.dida-block,
+.dida-pop {
+  --dida-hover: rgba(55, 53, 47, 0.06);
+  --dida-hover-soft: rgba(55, 53, 47, 0.035);
+  --dida-card-ring: rgba(15, 15, 15, 0.08) 0 0 0 1px, rgba(15, 15, 15, 0.06) 0 2px 4px;
+  --dida-card-ring-hover: rgba(15, 15, 15, 0.1) 0 0 0 1px, rgba(15, 15, 15, 0.1) 0 3px 8px;
+  --dida-box: rgba(55, 53, 47, 0.42);
+  --dida-lane-bg: rgba(55, 53, 47, 0.035);
+}
+.theme-dark .dida-panel,
+.theme-dark .dida-block,
+.theme-dark .dida-pop {
+  --dida-hover: rgba(255, 255, 255, 0.055);
+  --dida-hover-soft: rgba(255, 255, 255, 0.03);
+  --dida-card-ring: rgba(255, 255, 255, 0.09) 0 0 0 1px, rgba(0, 0, 0, 0.25) 0 2px 4px;
+  --dida-card-ring-hover: rgba(255, 255, 255, 0.14) 0 0 0 1px, rgba(0, 0, 0, 0.35) 0 3px 8px;
+  --dida-box: rgba(255, 255, 255, 0.4);
+  --dida-lane-bg: rgba(255, 255, 255, 0.03);
+}
+
 .dida-task {
   position: relative;
   display: flex;
-  gap: 10px;
-  padding: 8px 10px;
-  border-radius: 10px;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  transition: background 0.1s ease;
 }
-.dida-task:hover,
-.dida-task.is-expanded {
-  background: var(--dida-card);
-  box-shadow: var(--dida-shadow);
+.dida-task:hover {
+  background: var(--dida-hover);
 }
 .dida-task.is-expanded {
-  border-radius: 12px;
+  background: var(--dida-hover-soft);
   flex-wrap: wrap;
 }
 .dida-task.is-child {
-  margin-left: 20px;
-}
-.dida-task.is-done {
-  opacity: 0.7;
+  margin-left: 24px;
 }
 .dida-task.is-done .dida-task-title {
   text-decoration: line-through;
+  text-decoration-color: var(--text-faint);
   color: var(--text-faint);
 }
 
+/* 方形勾选框，和标题首行居中对齐 */
 .dida-panel input.dida-check,
 .dida-block input.dida-check {
   appearance: none;
   -webkit-appearance: none;
-  width: 18px;
-  height: 18px;
-  margin: 2px 0 0;
-  border-radius: 50%;
-  border: 1.5px solid var(--dida-ring);
-  background: var(--dida-card);
   flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 3px 0 0;
+  border-radius: 4px;
+  border: 1.5px solid var(--dida-box);
+  background: transparent;
   cursor: pointer;
   position: relative;
   box-shadow: none;
+  transition: background 0.1s ease, border-color 0.1s ease;
 }
 .dida-panel input.dida-check:hover,
 .dida-block input.dida-check:hover {
-  border-color: var(--dida-ring-mid);
-}
-.dida-panel input.dida-check.prio-3,
-.dida-block input.dida-check.prio-3 {
-  border-color: var(--dida-ring-mid);
-  border-width: 2px;
-}
-.dida-panel input.dida-check.prio-5,
-.dida-block input.dida-check.prio-5 {
-  border-color: var(--dida-accent);
-  border-width: 2px;
+  background: var(--dida-hover);
 }
 .dida-panel input.dida-check:checked,
 .dida-block input.dida-check:checked {
-  background: var(--dida-ring);
-  border-color: var(--dida-ring);
+  background: var(--dida-accent);
+  border-color: var(--dida-accent);
+}
+/* 已完成的勾选框是禁用态，浏览器会调淡，这里压回实心灰 */
+.dida-panel input.dida-check:checked:disabled,
+.dida-block input.dida-check:checked:disabled {
+  opacity: 1;
+  background: var(--text-faint);
+  border-color: var(--text-faint);
+  cursor: default;
 }
 .dida-panel input.dida-check:checked::after,
 .dida-block input.dida-check:checked::after {
   content: "";
   position: absolute;
-  left: 5px;
-  top: 2px;
+  left: 4.5px;
+  top: 1.5px;
   width: 4px;
   height: 8px;
   border: solid #fff;
-  border-width: 0 2px 2px 0;
+  border-width: 0 1.8px 1.8px 0;
   transform: rotate(45deg);
 }
 
@@ -726,10 +1748,12 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
 }
 .dida-task-title {
-  line-height: 1.45;
+  font-size: var(--font-ui-small);
+  line-height: 1.5;
+  color: var(--text-normal);
   cursor: pointer;
   overflow-wrap: anywhere;
 }
@@ -739,30 +1763,78 @@
 .dida-task-meta {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px 8px;
   flex-wrap: wrap;
-  font-size: var(--font-ui-smaller);
+  font-size: 12px;
+  line-height: 1.4;
   color: var(--text-faint);
 }
 .dida-task-meta:empty {
   display: none;
 }
+.dida-due {
+  color: var(--text-muted);
+}
 .dida-due.is-overdue {
-  color: var(--dida-accent-strong);
-  font-weight: 500;
+  color: #c4554d;
 }
 .dida-due.is-today {
-  color: var(--text-muted);
-  font-weight: 500;
+  color: #2b7bb9;
 }
-/* 关联笔记：一个图标，正文链接用强调色，来源链接灰色 */
+.theme-dark .dida-due.is-overdue {
+  color: #f08a80;
+}
+.theme-dark .dida-due.is-today {
+  color: #6cb4ee;
+}
+.dida-task-project {
+  color: var(--text-faint);
+}
+
+/* Notion 式选项色块：小圆角、浅底深字 */
+.dida-tag,
+.dida-prio {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  background: rgba(227, 226, 224, 0.7);
+  color: rgb(50, 48, 44);
+}
+.theme-dark .dida-tag,
+.theme-dark .dida-prio {
+  background: rgba(255, 255, 255, 0.09);
+  color: rgba(255, 255, 255, 0.78);
+}
+.dida-prio.is-5 {
+  background: rgb(255, 226, 221);
+  color: rgb(93, 23, 21);
+}
+.dida-prio.is-3 {
+  background: rgb(250, 222, 201);
+  color: rgb(73, 41, 14);
+}
+.theme-dark .dida-prio.is-5 {
+  background: rgba(190, 82, 65, 0.35);
+  color: #ffc9c0;
+}
+.theme-dark .dida-prio.is-3 {
+  background: rgba(196, 110, 46, 0.32);
+  color: #f6cfa6;
+}
+
+/* 关联笔记：一个灰色小图标，正文链接稍深 */
 .dida-panel button.dida-note-btn {
-  width: 20px;
-  height: 20px;
-  margin: -4px 0;
+  width: 18px;
+  height: 18px;
+  margin: -2px 0;
   padding: 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-faint);
   display: inline-flex;
@@ -772,50 +1844,45 @@
   box-shadow: none;
 }
 .dida-panel button.dida-note-btn.is-body {
-  color: var(--dida-accent);
+  color: var(--text-muted);
 }
 .dida-panel button.dida-note-btn:hover {
-  color: var(--dida-accent-strong);
-  background: var(--dida-accent-soft);
+  color: var(--text-normal);
+  background: var(--dida-hover);
 }
 .dida-panel button.dida-note-btn svg {
   width: 13px;
   height: 13px;
 }
 
-.dida-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  height: 18px;
-  padding: 0 7px;
-  border-radius: 999px;
-  font-size: var(--font-ui-smaller);
-  background: var(--dida-fill);
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
+/* 悬停操作：右上角一组浮起的小按钮，像 Notion 卡片上的「···」 */
 .dida-task-actions {
   position: absolute;
   right: 6px;
-  top: 6px;
+  top: 4px;
   display: none;
   gap: 0;
-  background: var(--dida-card);
-  border-radius: 8px;
+  padding: 1px;
+  border-radius: 6px;
+  background: var(--background-primary);
+  box-shadow: var(--dida-card-ring);
 }
 .dida-task:hover .dida-task-actions,
 .dida-task.is-expanded .dida-task-actions {
   display: inline-flex;
 }
 .dida-task-actions .dida-ibtn {
-  width: 26px;
-  height: 26px;
-  color: var(--text-faint);
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+  color: var(--text-muted);
 }
 .dida-task-actions .dida-ibtn:hover {
+  background: var(--dida-hover);
   color: var(--text-normal);
+}
+.dida-task-actions .dida-ibtn.is-accent {
+  color: var(--dida-accent);
 }
 .dida-task-actions .dida-ibtn svg {
   width: 14px;
@@ -909,41 +1976,126 @@
   flex: 1;
   min-height: 0;
   display: flex;
-  gap: 12px;
+  gap: 10px;
   align-items: flex-start;
   overflow-x: auto;
   overflow-y: hidden;
   scroll-snap-type: x proximity;
 }
+/* 泳道：浅灰底，卡片浮在上面 */
 .dida-lane {
-  width: 272px;
+  width: 264px;
   flex: none;
   max-height: 100%;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  border-radius: 12px;
+  gap: 6px;
+  padding: 6px 6px 4px;
+  border-radius: 10px;
+  background: var(--dida-lane-bg);
   scroll-snap-align: start;
+  transition: background 0.1s ease;
 }
 .dida-lane.is-over {
-  background: var(--dida-accent-soft);
-  outline: 1.5px dashed var(--dida-accent-line);
+  background: rgba(var(--dida-accent-rgb), 0.08);
+  outline: 1.5px dashed rgba(var(--dida-accent-rgb), 0.4);
   outline-offset: -1.5px;
 }
 .dida-lane-head {
   display: flex;
   align-items: center;
   gap: 6px;
-  height: 24px;
-  padding: 0 4px;
-  font-size: var(--font-ui-smaller);
-  font-weight: 500;
-  color: var(--text-muted);
+  height: 28px;
+  padding: 0 2px 0 4px;
+  font-size: 12px;
+  color: var(--text-faint);
   flex: none;
+}
+/* 泳道名做成 Notion 状态那样带圆点的胶囊 */
+.dida-lane-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 8px 0 7px;
+  border-radius: 999px;
+  background: rgba(227, 226, 224, 0.8);
+  color: rgb(50, 48, 44);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.dida-lane-name::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgb(145, 145, 142);
+}
+.dida-lane.is-overdue .dida-lane-name {
+  background: rgb(255, 226, 221);
+  color: rgb(93, 23, 21);
+}
+.dida-lane.is-overdue .dida-lane-name::before {
+  background: rgb(205, 60, 58);
+}
+.dida-lane.is-today .dida-lane-name {
+  background: rgb(211, 229, 239);
+  color: rgb(24, 51, 71);
+}
+.dida-lane.is-today .dida-lane-name::before {
+  background: rgb(46, 120, 178);
+}
+.dida-lane.is-done .dida-lane-name {
+  background: rgb(219, 237, 219);
+  color: rgb(28, 56, 41);
+}
+.dida-lane.is-done .dida-lane-name::before {
+  background: rgb(68, 131, 97);
+}
+.theme-dark .dida-lane-name {
+  background: rgba(255, 255, 255, 0.09);
+  color: rgba(255, 255, 255, 0.8);
+}
+.theme-dark .dida-lane.is-overdue .dida-lane-name {
+  background: rgba(190, 82, 65, 0.35);
+  color: #ffc9c0;
+}
+.theme-dark .dida-lane.is-today .dida-lane-name {
+  background: rgba(46, 120, 178, 0.35);
+  color: #c4e2fa;
+}
+.theme-dark .dida-lane.is-done .dida-lane-name {
+  background: rgba(68, 131, 97, 0.35);
+  color: #c6ebd3;
+}
+.dida-panel button.dida-lane-action {
+  height: 22px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+  box-shadow: none;
+}
+.dida-panel button.dida-lane-action:hover {
+  background: var(--dida-hover);
+  color: var(--text-normal);
 }
 .dida-lane-head .dida-ibtn.is-small {
   width: 24px;
   height: 24px;
+  color: var(--text-faint);
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+.dida-lane:hover .dida-lane-head .dida-ibtn.is-small {
+  opacity: 1;
+}
+.dida-lane-head .dida-ibtn.is-small:hover {
+  background: var(--dida-hover);
+  color: var(--text-normal);
 }
 .dida-lane-head .dida-ibtn.is-small svg {
   width: 14px;
@@ -952,29 +2104,50 @@
 .dida-lane-cards {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   overflow-y: auto;
   min-height: 0;
-  padding: 2px;
+  padding: 1px;
 }
 .dida-lane-empty {
-  height: 56px;
-  border-radius: 12px;
-  border: 1.5px dashed var(--dida-line);
+  height: 40px;
+  border-radius: 8px;
+  border: 1px dashed var(--dida-line);
 }
+/* 卡片：白底 + 一圈细描边 + 轻投影 */
 .dida-task.is-card {
-  background: var(--dida-card);
-  box-shadow: var(--dida-shadow);
-  border-radius: 12px;
-  padding: 10px 12px;
+  padding: 8px 10px 9px;
+  border-radius: 8px;
+  background: var(--background-primary);
+  box-shadow: var(--dida-card-ring);
   cursor: grab;
 }
+.dida-task.is-card:hover {
+  background: var(--background-primary);
+  box-shadow: var(--dida-card-ring-hover);
+}
+.dida-task.is-card.is-expanded {
+  background: var(--background-primary);
+}
+.theme-dark .dida-task.is-card,
+.theme-dark .dida-task.is-card:hover {
+  background: var(--background-secondary);
+}
 .dida-task.is-card.is-dragging {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: grabbing;
 }
 .dida-task.is-card .dida-task-title {
+  font-weight: 500;
   cursor: pointer;
+}
+.dida-lane .dida-ghost {
+  padding: 6px 8px;
+  border-radius: 6px;
+}
+.dida-lane .dida-ghost:hover {
+  background: var(--dida-hover);
+  color: var(--text-muted);
 }
 
 /* 主窗格里宽度够时，看板铺开、留白加大 */
@@ -985,10 +2158,15 @@
   .dida-header,
   .dida-tabs,
   .dida-project-head,
+  .dida-viewbar,
   .dida-filter,
   .dida-quick {
     margin-left: 32px;
     margin-right: 32px;
+  }
+  .dida-quick-chips {
+    margin-left: 28px;
+    margin-right: 28px;
   }
   .dida-header {
     padding-left: 0;
@@ -1312,7 +2490,17 @@
   background: var(--dida-accent-soft);
   color: var(--dida-accent-strong);
 }
+.dida-modal button.dida-linkbtn {
+  max-width: calc(100% - 20px);
+}
+.dida-modal button.dida-linkbtn span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .dida-modal button.dida-linkbtn svg {
+  flex: none;
   width: 12px;
   height: 12px;
 }
@@ -1369,6 +2557,233 @@
   font-weight: 400;
 }
 
+/* ---------- 任务体检 ---------- */
+
+.modal.dida-review-modal {
+  width: 640px;
+}
+.dida-review {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.dida-review-heading {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.dida-review-scope {
+  align-self: flex-start;
+}
+.dida-review-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.dida-review-issue {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--dida-fill);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.dida-review-issue.is-0 { background: rgba(59, 130, 246, 0.12); color: #2563eb; }
+.dida-review-issue.is-1 { background: rgba(139, 92, 246, 0.12); color: #7c3aed; }
+.dida-review-issue.is-2 { background: rgba(245, 158, 11, 0.14); color: #b45309; }
+.dida-review-issue.is-3 { background: var(--dida-accent-soft); color: var(--dida-accent-strong); }
+.dida-review-issue.is-4 { background: rgba(113, 113, 122, 0.14); color: var(--text-muted); }
+.theme-dark .dida-review-issue.is-0 { color: #93c5fd; }
+.theme-dark .dida-review-issue.is-1 { color: #c4b5fd; }
+.theme-dark .dida-review-issue.is-2 { color: #fcd34d; }
+.dida-review-info {
+  font-size: var(--font-ui-small);
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+.dida-review-error {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-error);
+}
+.dida-review-running {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 36px 0 24px;
+  text-align: center;
+}
+.dida-review-spinner {
+  display: inline-flex;
+  color: var(--dida-accent);
+}
+.dida-review-spinner svg {
+  width: 22px;
+  height: 22px;
+  animation: dida-spin 1s linear infinite;
+}
+.dida-review-running-text {
+  font-size: var(--font-ui-small);
+  color: var(--text-normal);
+}
+.dida-review-elapsed {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.dida-review-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.dida-review-summary {
+  font-size: var(--font-ui-medium);
+  line-height: 1.55;
+  color: var(--text-normal);
+}
+.dida-review-summary:empty {
+  display: none;
+}
+.dida-review-meta {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+}
+.dida-filter.dida-review-filter {
+  margin: 0;
+}
+.dida-review-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: min(58vh, 560px);
+  overflow-y: auto;
+  margin: 0 -4px;
+  padding: 2px 4px;
+}
+.dida-review-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--dida-card);
+  box-shadow: var(--dida-shadow);
+}
+.dida-review-card.is-handled {
+  opacity: 0.6;
+  box-shadow: none;
+  background: var(--dida-fill);
+}
+.dida-review-card-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.dida-review-project {
+  min-width: 0;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dida-review-title {
+  font-weight: 500;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.dida-review-card.is-handled .dida-review-title {
+  text-decoration: line-through;
+  color: var(--text-muted);
+}
+.dida-review-reason {
+  font-size: var(--font-ui-smaller);
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+.dida-review-preview {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: var(--font-ui-smaller);
+  color: var(--dida-accent-strong);
+  line-height: 1.5;
+}
+.dida-review-preview svg {
+  width: 13px;
+  height: 13px;
+  margin-top: 2px;
+  flex: none;
+}
+.dida-review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding-top: 4px;
+}
+.dida-modal .dida-review-actions button {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--dida-line);
+  border-radius: 8px;
+  background: var(--dida-card);
+  box-shadow: none;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-normal);
+  cursor: pointer;
+}
+.dida-modal .dida-review-actions button:hover {
+  border-color: var(--text-faint);
+}
+.dida-modal .dida-review-actions button.is-recommended {
+  border-color: var(--dida-accent);
+  background: var(--dida-accent);
+  color: #fff;
+  font-weight: 500;
+}
+.dida-modal .dida-review-actions button.is-recommended:hover {
+  background: var(--dida-accent-strong);
+}
+.dida-modal .dida-review-actions button.is-danger {
+  color: var(--text-error);
+}
+.dida-modal .dida-review-actions button.is-recommended.is-danger {
+  color: #fff;
+}
+.dida-modal .dida-review-actions button.is-ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-faint);
+}
+.dida-modal .dida-review-actions button.is-ghost:hover {
+  color: var(--text-normal);
+}
+.dida-modal .dida-review-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.dida-review-busy {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+}
+.dida-review-done {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+.dida-review-done svg {
+  width: 13px;
+  height: 13px;
+  color: var(--color-green);
+}
+
 /* ---------- 笔记内嵌任务块 ---------- */
 
 .dida-block {
@@ -1416,4 +2831,57 @@
 .dida-block-row .dida-due {
   font-size: var(--font-ui-smaller);
   color: var(--text-faint);
+}
+
+/* ---------- 对话模式：展开后对话铺满整个视图，清单暂时藏起来 ---------- */
+
+.view-content.dida-host.is-chat > .dida-panel {
+  display: none;
+}
+.view-content.dida-host.is-chat > .dida-dock {
+  flex: 1;
+  min-height: 0;
+  border-top: 0;
+}
+.dida-host.is-chat .dida-chat {
+  flex: 1;
+}
+.dida-host.is-chat .dida-chat-header {
+  min-height: 44px;
+  padding-left: 16px;
+}
+.dida-host.is-chat .dida-chat-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+.dida-host.is-chat .dida-chat-messages {
+  flex: 1;
+  max-height: none;
+  min-height: 0;
+  padding: 16px 16px 8px;
+  gap: 18px;
+}
+/* 宽窗格里限制阅读宽度，居中 */
+.dida-host.is-chat .dida-chat-messages > *,
+.dida-host.is-chat .dida-composer {
+  width: 100%;
+  max-width: 760px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.dida-host.is-chat .dida-chat-msg.is-user {
+  width: auto;
+  max-width: min(85%, 640px);
+  margin-right: max(0px, calc((100% - 760px) / 2));
+}
+.dida-host.is-chat .dida-chat-welcome {
+  margin-top: auto;
+  margin-bottom: auto;
+}
+.dida-host.is-chat .dida-composer {
+  padding-top: 8px;
+}
+
+.dida-modal button.dida-col.is-none {
+  border-style: dashed;
 }

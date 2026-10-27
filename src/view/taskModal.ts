@@ -38,6 +38,8 @@ export class TaskModal extends Modal {
   private tagEditing = false;
   private chipsEl: HTMLElement | null = null;
   private columnsEl: HTMLElement | null = null;
+  /** 明确放在「未分组」：新建时用户选的，或编辑一条本来就没分组的任务 */
+  private noColumn = false;
   private dateRowEl: HTMLElement | null = null;
 
   constructor(private readonly plugin: DidaPanelPlugin, private readonly opts: TaskModalOptions) {
@@ -56,6 +58,7 @@ export class TaskModal extends Modal {
       tags: [...(t?.tags ?? p.tags ?? [])],
       content: t?.content ?? p.content ?? ""
     };
+    this.noColumn = t ? !t.columnId : p.columnId === null;
   }
 
   get isEdit(): boolean {
@@ -98,7 +101,7 @@ export class TaskModal extends Modal {
       this.columns = [];
     }
     this.columnsFor = key;
-    if (this.columns.length && !this.columns.some((c) => c.id === this.state.columnId)) {
+    if (this.columns.length && !this.noColumn && !this.columns.some((c) => c.id === this.state.columnId)) {
       this.state.columnId = this.columns[0].id;
     }
     this.renderColumns();
@@ -159,11 +162,13 @@ export class TaskModal extends Modal {
     textarea.value = this.state.content;
     textarea.placeholder = "正文：粘贴或插入笔记链接\n来源：素材出处";
     textarea.addEventListener("input", () => (this.state.content = textarea.value));
+    const current = this.plugin.currentNote();
     const linkBtn = note.createEl("button", { type: "button", cls: "dida-linkbtn" });
     setIcon(linkBtn, "link");
-    linkBtn.createSpan({ text: "插入当前笔记链接" });
+    const noteName = current ? (current.path.split("/").pop() ?? current.path).replace(/\.md$/, "") : null;
+    linkBtn.createSpan({ text: noteName ? `插入当前笔记：${noteName}` : "插入当前笔记" });
+    if (current) linkBtn.setAttribute("title", current.path);
     linkBtn.addEventListener("click", () => {
-      const current = this.plugin.currentNote();
       if (!current) {
         new Notice("当前没有打开的笔记");
         return;
@@ -213,6 +218,7 @@ export class TaskModal extends Modal {
       new ProjectSuggestModal(this.app, store, (p) => {
         this.state.projectId = p.id;
         this.state.columnId = null;
+        this.noColumn = false;
         this.renderChips();
         void this.loadColumns();
       }).open();
@@ -331,15 +337,25 @@ export class TaskModal extends Modal {
     if (!host) return;
     host.empty();
     if (!this.columns.length) return;
-    host.createSpan({ cls: "dida-columns-label", text: "看板列" });
+    host.createSpan({ cls: "dida-columns-label", text: "分组" });
     for (const col of this.columns) {
       const pill = host.createEl("button", { type: "button", cls: "dida-col", text: col.name });
-      pill.toggleClass("is-set", this.state.columnId === col.id);
+      pill.toggleClass("is-set", !this.noColumn && this.state.columnId === col.id);
       pill.addEventListener("click", () => {
         this.state.columnId = col.id;
+        this.noColumn = false;
         this.renderColumns();
       });
     }
+    // 接口改不回「没有分组」，所以编辑已分组的任务时不给这个选项
+    if (this.isEdit && this.opts.task?.columnId) return;
+    const none = host.createEl("button", { type: "button", cls: "dida-col is-none", text: "未分组" });
+    none.toggleClass("is-set", this.noColumn);
+    none.addEventListener("click", () => {
+      this.state.columnId = null;
+      this.noColumn = true;
+      this.renderColumns();
+    });
   }
 
   // ---------- 提交 ----------

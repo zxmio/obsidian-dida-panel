@@ -1,5 +1,5 @@
 import type { DidaApi } from "./dida/api.ts";
-import { addDays, startOfDay } from "./dida/dates.ts";
+import { addDays, describeDue, startOfDay } from "./dida/dates.ts";
 import { INBOX_ID, isInboxId, type DidaColumn, type DidaProject, type DidaProjectGroup, type DidaTag, type DidaTask, type TaskInput } from "./dida/types.ts";
 
 export interface ProjectSnapshot {
@@ -47,6 +47,9 @@ const INBOX_PROJECT: DidaProject = {
   kind: "TASK"
 };
 
+/** 新建任务在本地补位的最长时间；滴答通常几秒内就能读到 */
+const PENDING_TTL = 2 * 60_000;
+
 /** 名字只有方块符号的空项目是侧栏视觉分隔符，不当项目用。 */
 export function isSeparatorProject(name: string): boolean {
   return /^[\s▫◻▪◼□■️]+$/.test(name);
@@ -66,6 +69,8 @@ export class DidaStore {
   private readonly projectCache = new Map<string, ProjectSnapshot>();
   private readonly listeners = new Set<() => void>();
   private readonly inflight = new Map<string, Promise<unknown>>();
+  /** 刚建的任务：滴答的读接口会滞后几秒，重新拉取时没返回的先补回去，见到了就移除。 */
+  private readonly pendingCreated = new Map<string, { task: DidaTask; at: number }>();
 
   constructor(private readonly api: DidaApi, private readonly options: StoreOptions) {}
 
@@ -150,7 +155,7 @@ export class DidaStore {
     if (!force && cached && Date.now() - cached.fetchedAt < 60_000) return cached;
     return this.dedupe(`project:${key}`, async () => {
       const bundle = await this.api.getProjectWithTasks(key);
-      const snapshot: ProjectSnapshot = { ...bundle, fetchedAt: Date.now() };
+      const snapshot: ProjectSnapshot = { ...bundle, tasks: this.withPending(bundle.tasks, (t) => this.projectKey(t.projectId) === key), fetchedAt: Date.now() };
       if (key === INBOX_ID) snapshot.project = { ...snapshot.project, id: INBOX_ID, name: "收件箱" };
       this.projectCache.set(key, snapshot);
       this.lastRefreshAt = Date.now();
@@ -172,7 +177,7 @@ export class DidaStore {
       ]);
       const todayIds = new Set(today.map((t) => t.id));
       this.today = {
-        today,
+        today: this.withPending(today, (t) => describeDue(t).state === "today"),
         overdue: overdue.filter((t) => !todayIds.has(t.id)),
         completed,
         fetchedAt: Date.now()
@@ -187,7 +192,7 @@ export class DidaStore {
   async loadOverview(force = false): Promise<OverviewSnapshot> {
     if (!force && this.overview && Date.now() - this.overview.fetchedAt < 60_000) return this.overview;
     return this.dedupe("overview", async () => {
-      const tasks = await this.api.listAllUndoneTasks();
+      const tasks = this.withPending(await this.api.listAllUndoneTasks(), () => true);
       const todayStart = startOfDay(new Date()).getTime();
       const counts = new Map<string, ProjectCount>();
       let totalOverdue = 0;
@@ -228,6 +233,7 @@ export class DidaStore {
   }
 
   private removeLocally(taskId: string): void {
+    this.pendingCreated.delete(taskId);
     for (const snap of this.projectCache.values()) snap.tasks = snap.tasks.filter((t) => t.id !== taskId);
     if (this.today) {
       this.today = {
@@ -239,6 +245,7 @@ export class DidaStore {
   }
 
   private replaceLocally(task: DidaTask): void {
+    if (this.pendingCreated.has(task.id)) this.pendingCreated.set(task.id, { task, at: Date.now() });
     const swap = (list: DidaTask[]): DidaTask[] => list.map((t) => (t.id === task.id ? task : t));
     for (const snap of this.projectCache.values()) snap.tasks = swap(snap.tasks);
     if (this.today) {
@@ -275,9 +282,24 @@ export class DidaStore {
   }
 
   async createTask(input: TaskInput): Promise<DidaTask> {
-    const task = await this.api.createTask(input);
+    const created = await this.api.createTask(input);
+    const task: DidaTask = { ...created, columnId: created.columnId ?? input.columnId ?? null };
+    this.pendingCreated.set(task.id, { task, at: Date.now() });
     this.reloadAffected([input.projectId]);
+    // 第一次重拉多半还读不到新任务，过几秒再对一次账
+    setTimeout(() => this.reloadAffected([input.projectId]), 4000);
     return task;
+  }
+
+  private withPending(fresh: DidaTask[], belongs: (task: DidaTask) => boolean): DidaTask[] {
+    const now = Date.now();
+    const ids = new Set(fresh.map((t) => t.id));
+    const extra: DidaTask[] = [];
+    for (const [id, entry] of this.pendingCreated) {
+      if (now - entry.at > PENDING_TTL) this.pendingCreated.delete(id);
+      else if (!ids.has(id) && belongs(entry.task)) extra.push(entry.task);
+    }
+    return extra.length ? [...fresh, ...extra] : fresh;
   }
 
   async updateTask(task: DidaTask, patch: Partial<TaskInput> & { status?: DidaTask["status"] }): Promise<DidaTask> {
@@ -308,11 +330,22 @@ export class DidaStore {
     }
   }
 
+  /** 收件箱的真实 id（inbox 加用户号），从缓存里任意一条收件箱任务上取。 */
+  private realInboxId(): string | null {
+    const pools = [...Array.from(this.projectCache.values()).map((s) => s.tasks), this.overview?.tasks ?? [], this.today?.today ?? [], this.today?.overdue ?? []];
+    for (const list of pools) {
+      const hit = list.find((t) => isInboxId(t.projectId) && t.projectId !== INBOX_ID);
+      if (hit) return hit.projectId;
+    }
+    return null;
+  }
+
   async moveTask(task: DidaTask, toProjectId: string): Promise<void> {
+    const target = toProjectId === INBOX_ID ? (this.realInboxId() ?? toProjectId) : toProjectId;
     this.removeLocally(task.id);
     this.emit();
     try {
-      await this.api.moveTask(task, toProjectId);
+      await this.api.moveTask(task, target);
     } finally {
       this.reloadAffected([task.projectId, toProjectId]);
     }

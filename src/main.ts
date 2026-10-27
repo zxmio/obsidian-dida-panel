@@ -1,7 +1,7 @@
 import { FileSystemAdapter, Notice, Plugin, type Editor, type MarkdownFileInfo, type MarkdownView, type Menu, type TFile } from "obsidian";
 import { DidaApi } from "./dida/api.ts";
 import { formatDidaDate, startOfDay } from "./dida/dates.ts";
-import { appendNoteLink, noteContentLine } from "./dida/deeplink.ts";
+import { appendNoteLink } from "./dida/deeplink.ts";
 import type { DidaTask, TaskInput } from "./dida/types.ts";
 import { McpAuthError, McpClient } from "./mcp/client.ts";
 import { loginWithBrowser, refreshTokens, tokensExpired } from "./mcp/oauth.ts";
@@ -14,6 +14,7 @@ import { DidaPanelView, VIEW_TYPE_DIDA } from "./view/panelView.ts";
 import { ProjectSuggestModal } from "./view/projectSuggest.ts";
 import { TaskModal, type TaskModalOptions } from "./view/taskModal.ts";
 import { TaskSuggestModal } from "./view/taskSuggest.ts";
+import { ReviewModal } from "./view/reviewModal.ts";
 
 export interface NoteRef {
   vault: string;
@@ -174,6 +175,15 @@ export default class DidaPanelPlugin extends Plugin {
     void this.app.workspace.revealLeaf(leaf);
   }
 
+  /** 任务体检：默认审面板当前所在的项目或收件箱，在今天 / 总览时审全部待办。 */
+  openReview(): void {
+    if (!this.isLoggedIn()) {
+      new Notice("先在设置里登录滴答清单");
+      return;
+    }
+    new ReviewModal(this, this.panelView()?.reviewScope() ?? null).open();
+  }
+
   // ---------- 派给 AI ----------
 
   /** 打队列标签 + 拼指令 + 拉起 MakerPilot 填好。MakerPilot 不在时把指令复制到剪贴板。 */
@@ -236,10 +246,6 @@ export default class DidaPanelPlugin extends Plugin {
     return { vault: this.settings.vaultName || this.app.vault.getName(), path: file.path };
   }
 
-  noteLinkContent(note: NoteRef): string {
-    return noteContentLine(note.vault, note.path);
-  }
-
   tagLabel(name: string): string {
     return this.store.tagByName(name)?.label ?? name;
   }
@@ -247,14 +253,12 @@ export default class DidaPanelPlugin extends Plugin {
   applyTagColor(el: HTMLElement, name: string): void {
     const color = this.store.tagByName(name)?.color;
     if (!color) return;
-    el.style.background = `color-mix(in srgb, ${color} 22%, var(--background-primary))`;
-    el.style.color = `color-mix(in srgb, ${color} 60%, var(--text-normal))`;
+    el.style.background = `color-mix(in srgb, ${color} 16%, var(--background-primary))`;
+    el.style.color = `color-mix(in srgb, ${color} 45%, var(--text-normal))`;
   }
 
   openCreateModal(prefill: Partial<TaskInput> = {}, extra: Omit<TaskModalOptions, "task" | "prefill"> = {}): void {
-    const note = this.settings.attachNoteLink ? this.currentNote() : null;
-    const content = prefill.content ?? (note ? this.noteLinkContent(note) : "");
-    new TaskModal(this, { prefill: { ...prefill, content }, ...extra }).open();
+    new TaskModal(this, { prefill: { ...prefill, content: prefill.content ?? "" }, ...extra }).open();
   }
 
   openEditModal(task: DidaTask, onDone?: (task: DidaTask) => void): void {
@@ -330,6 +334,7 @@ export default class DidaPanelPlugin extends Plugin {
         });
       }
     });
+    this.addCommand({ id: "review-tasks", name: "任务体检", callback: () => this.openReview() });
     this.addCommand({ id: "sync-now", name: "立即同步", callback: () => void (this.panelView()?.refresh(true) ?? this.store.loadProjects(true)) });
     this.addCommand({ id: "login", name: "登录滴答清单", callback: () => void this.login().catch(() => null) });
   }
@@ -353,9 +358,7 @@ export default class DidaPanelPlugin extends Plugin {
     const lines = text.split("\n").map((l) => l.replace(/^\s*(?:[-*+]|\d+[.)])\s*(?:\[[ xX]\]\s*)?/, "").trim()).filter(Boolean);
     const title = (lines[0] ?? text).slice(0, 120);
     const rest = lines.slice(1).join("\n");
-    const note = this.settings.attachNoteLink ? this.currentNote() : null;
-    const content = note ? appendNoteLink(rest, note.vault, note.path) : rest;
-    const prefill: Partial<TaskInput> = { title, content };
+    const prefill: Partial<TaskInput> = { title, content: rest };
     if (today) {
       const when = formatDidaDate(startOfDay(new Date()), true);
       prefill.startDate = when;

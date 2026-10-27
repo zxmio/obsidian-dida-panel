@@ -71,3 +71,39 @@ test("单独的 # ! ^ 字符留在标题里", () => {
   const r = parseQuickAdd("C# 语法 ! ^", now);
   assert.equal(r.title, "C# 语法 ! ^");
 });
+
+test("快捷按钮替换同类速记词，标题和其他速记不动", async () => {
+  const { setQuickToken, toggleQuickTag, projectToken, parseQuickAdd } = await import("../src/dida/quickAdd.ts");
+  const now = new Date(2026, 9, 27, 10, 0);
+  let s = setQuickToken("写周报 明天 14:00 !低", "date", "后天", now);
+  assert.equal(s, "写周报 14:00 !低 后天 ");
+  s = setQuickToken(s, "priority", "!高", now);
+  assert.equal(s, "写周报 14:00 后天 !高 ");
+  s = setQuickToken(s, "date", null, now);
+  assert.equal(s, "写周报 14:00 !高 ");
+  s = toggleQuickTag(s, "公众号");
+  assert.equal(s, "写周报 14:00 !高 #公众号 ");
+  s = toggleQuickTag(s, "公众号");
+  assert.equal(s, "写周报 14:00 !高 ");
+  s = setQuickToken(s, "project", projectToken("📕 内容 创作"), now);
+  const parsed = parseQuickAdd(s, now);
+  assert.equal(parsed.title, "写周报");
+  assert.equal(parsed.priority, 5);
+  assert.equal(parsed.projectQuery, "📕内容创作");
+  assert.equal(setQuickToken("", "priority", "!中", now), "!中 ");
+});
+
+test("日历与时间写回速记：今年未来写月日，其余写完整日期，时间单独替换", async () => {
+  const { setQuickToken, dateToken, timeToken, parseQuickAdd } = await import("../src/dida/quickAdd.ts");
+  const now = new Date(2026, 9, 27, 10, 0);
+  assert.equal(dateToken(new Date(2026, 10, 3), now), "11月3日");
+  assert.equal(dateToken(new Date(2027, 10, 3), now), "2027-11-3");
+  assert.equal(dateToken(new Date(2026, 9, 1), now), "2026-10-1");
+  for (const d of [new Date(2026, 10, 3), new Date(2027, 10, 3), new Date(2026, 9, 1)]) {
+    assert.equal(parseQuickAdd(`x ${dateToken(d, now)}`, now).date.getTime(), d.getTime());
+  }
+  let s = setQuickToken("开会 明天 9点", "time", timeToken(14, 30), now);
+  assert.equal(s, "开会 明天 14:30 ");
+  s = setQuickToken(s, "time", null, now);
+  assert.equal(s, "开会 明天 ");
+});

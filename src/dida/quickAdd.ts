@@ -113,3 +113,51 @@ export function parseQuickAdd(input: string, now: Date = new Date()): QuickAddRe
   result.title = words.join(" ");
   return result;
 }
+
+export type QuickTokenKind = "date" | "time" | "priority" | "project";
+
+function tokenKind(token: string, now: Date): QuickTokenKind | "tag" | null {
+  if (token.length > 1 && token.startsWith("!") && token.slice(1) in PRIORITY_WORDS) return "priority";
+  if (token.length > 1 && token.startsWith("#")) return "tag";
+  if (token.length > 1 && token.startsWith("^")) return "project";
+  if (parseDateWord(token, now)) return "date";
+  if (parseTimeWord(token)) return "time";
+  return null;
+}
+
+/**
+ * 快捷按钮改速记：去掉同类的旧词，把新词接到末尾；token 为 null 时只删除。
+ * 输入框里的文字始终是唯一的事实源，按钮只是帮忙写速记。
+ */
+export function setQuickToken(input: string, kind: QuickTokenKind, token: string | null, now: Date = new Date()): string {
+  const kept = input.split(/\s+/).filter((w) => w && tokenKind(w, now) !== kind);
+  if (token) kept.push(token);
+  return kept.join(" ") + (kept.length ? " " : "");
+}
+
+/** 标签按钮：有就去掉，没有就加上。 */
+export function toggleQuickTag(input: string, tag: string): string {
+  const words = input.split(/\s+/).filter(Boolean);
+  const hit = `#${tag}`;
+  const next = words.includes(hit) ? words.filter((w) => w !== hit) : [...words, hit];
+  return next.join(" ") + (next.length ? " " : "");
+}
+
+/** 项目名里的空格会把速记词拆开，写进输入框前去掉。 */
+export function projectToken(name: string): string {
+  return `^${name.replace(/\s+/g, "")}`;
+}
+
+/**
+ * 日历选中的日期写成速记词：今年且不早于今天写「11月3日」，其余写完整日期，
+ * 免得「月日」被解析成明年。
+ */
+export function dateToken(d: Date, now: Date = new Date()): string {
+  const today = startOfDay(now);
+  if (d.getFullYear() === today.getFullYear() && startOfDay(d) >= today) return `${d.getMonth() + 1}月${d.getDate()}日`;
+  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+}
+
+export function timeToken(h: number, m: number): string {
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
