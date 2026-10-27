@@ -1,3 +1,7 @@
+import { shell } from "electron";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { FileSystemAdapter, Notice, Plugin, type Editor, type MarkdownFileInfo, type MarkdownView, type Menu, type TFile } from "obsidian";
 import { DidaApi } from "./dida/api.ts";
 import { formatDidaDate, startOfDay } from "./dida/dates.ts";
@@ -6,7 +10,8 @@ import type { DidaTask, TaskInput } from "./dida/types.ts";
 import { McpAuthError, McpClient } from "./mcp/client.ts";
 import { loginWithBrowser, refreshTokens, tokensExpired } from "./mcp/oauth.ts";
 import { DEFAULT_SETTINGS, DidaSettingTab, type DidaSettings } from "./settings.ts";
-import { sendToMakerPilot } from "./dispatch/makerpilot.ts";
+import { findMakerPilot, sendToMakerPilot } from "./dispatch/makerpilot.ts";
+import { dispatchUrl, targetInfo, type DispatchTarget } from "./dispatch/targets.ts";
 import { buildDispatchPrompt, isQueued, withQueueTag, withoutQueueTag } from "./dispatch/prompt.ts";
 import { DidaStore } from "./store.ts";
 import { renderDidaBlock } from "./view/codeblock.ts";
@@ -187,7 +192,11 @@ export default class DidaPanelPlugin extends Plugin {
   // ---------- 派给 AI ----------
 
   /** 打队列标签 + 拼指令 + 拉起 MakerPilot 填好。MakerPilot 不在时把指令复制到剪贴板。 */
-  async dispatchTask(task: DidaTask, openMakerPilot = true): Promise<void> {
+  /**
+   * 派给 AI：先打上队列标签，再按 target 打开对应的 AI（不传就用设置里的默认去处）。
+   * target 为 "none" 时只进队列，等 Claude Code 的领活循环来取。
+   */
+  async dispatchTask(task: DidaTask, target: DispatchTarget | "none" = this.settings.aiTarget): Promise<void> {
     const tag = this.settings.aiTag;
     let current = task;
     if (!isQueued(task, tag)) {
@@ -198,7 +207,7 @@ export default class DidaPanelPlugin extends Plugin {
         return;
       }
     }
-    if (!openMakerPilot) {
+    if (target === "none") {
       new Notice(`已进 AI 队列：「${task.title}」`);
       return;
     }
@@ -211,13 +220,42 @@ export default class DidaPanelPlugin extends Plugin {
       vaultName: this.settings.vaultName || this.app.vault.getName(),
       template: this.settings.aiPromptTemplate
     });
-    const result = await sendToMakerPilot(this.app, prompt, this.settings.aiNewConversation);
-    if (result === "sent") {
-      new Notice("已派给 MakerPilot，确认一下指令再回车");
+    const info = targetInfo(target);
+
+    if (target === "makerpilot") {
+      const result = await sendToMakerPilot(this.app, prompt, this.settings.aiNewConversation);
+      if (result === "sent") {
+        new Notice("已派给 MakerPilot，确认一下指令再回车");
+        return;
+      }
+      await navigator.clipboard.writeText(prompt);
+      new Notice(result === "no-plugin" ? "MakerPilot 未启用，指令已复制到剪贴板" : "MakerPilot 还没准备好，指令已复制到剪贴板", 6000);
       return;
     }
-    await navigator.clipboard.writeText(prompt);
-    new Notice(result === "no-plugin" ? "MakerPilot 未启用，指令已复制到剪贴板" : "MakerPilot 还没准备好，指令已复制到剪贴板", 6000);
+
+    const url = dispatchUrl(target, prompt, this.dispatchWorkdir());
+    if (!url || !appInstalled(info.app)) {
+      await navigator.clipboard.writeText(prompt);
+      new Notice(`没找到 ${info.app?.replace(/\.app$/, "") ?? info.label}，指令已复制到剪贴板`, 6000);
+      return;
+    }
+    try {
+      await shell.openExternal(url);
+      new Notice(`已在 ${info.label} 新开会话，确认一下指令再发送`);
+    } catch (error) {
+      await navigator.clipboard.writeText(prompt);
+      new Notice(`打不开 ${info.label}（${error instanceof Error ? error.message : String(error)}），指令已复制到剪贴板`, 6000);
+    }
+  }
+
+  /** 这个去处现在能不能用：MakerPilot 看插件启用没有，其余看桌面 App 装没装。 */
+  dispatchAvailable(target: DispatchTarget): boolean {
+    return target === "makerpilot" ? findMakerPilot(this.app) !== null : appInstalled(targetInfo(target).app);
+  }
+
+  /** Claude Code、Codex 的工作目录：设置里填了就用，没填用 vault 所在目录。 */
+  dispatchWorkdir(): string {
+    return this.settings.aiWorkdir.trim() || this.vaultPath();
   }
 
   async undispatchTask(task: DidaTask): Promise<void> {
@@ -384,4 +422,10 @@ export default class DidaPanelPlugin extends Plugin {
       }
     }).open();
   }
+}
+
+/** macOS 上看 App 装没装；其他系统没法判断，直接交给系统去打开。 */
+function appInstalled(app: string | null): boolean {
+  if (!app || process.platform !== "darwin") return true;
+  return [join("/Applications", app), join(homedir(), "Applications", app)].some((p) => existsSync(p));
 }

@@ -221,7 +221,7 @@ export class ReviewModal extends Modal {
           await store.deleteTask(task);
           break;
         case "dispatch":
-          await this.plugin.dispatchTask(task, false);
+          await this.plugin.dispatchTask(task, "none");
           break;
       }
       state.handled = option.label;

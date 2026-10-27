@@ -2,10 +2,18 @@ import { setIcon } from "obsidian";
 
 export interface PopoverItemOptions {
   icon?: string;
+  /** 单色 SVG logo，优先于 icon */
+  logo?: { viewBox: string; path: string } | null;
   /** 图标位置换成一个色点，用于标签颜色 */
   dot?: string | null;
   label: string;
   hint?: string;
+  /** 右侧小标签，比如「默认」 */
+  badge?: string;
+  /** 悬停时出现在右侧的次要操作，点它不触发 onSelect */
+  action?: { label: string; run: () => void };
+  /** 灰掉，不能选，键盘也跳过 */
+  disabled?: boolean;
   checked?: boolean;
   /** 多选列表用方框勾选，单选列表用右侧对勾 */
   checkbox?: boolean;
@@ -100,12 +108,36 @@ export class QuickPopover {
     if (o.dot !== undefined) {
       const dot = row.createSpan({ cls: "dida-pop-dot" });
       if (o.dot) dot.style.background = o.dot;
+    } else if (o.logo) {
+      const box = row.createSpan({ cls: "dida-pop-icon is-logo" });
+      const ns = "http://www.w3.org/2000/svg";
+      const svg = box.doc.createElementNS(ns, "svg");
+      svg.setAttribute("viewBox", o.logo.viewBox);
+      svg.setAttribute("fill", "currentColor");
+      const path = box.doc.createElementNS(ns, "path");
+      path.setAttribute("d", o.logo.path);
+      svg.appendChild(path);
+      box.appendChild(svg);
     } else if (o.icon) {
       setIcon(row.createSpan({ cls: "dida-pop-icon" }), o.icon);
     }
     row.createSpan({ cls: "dida-pop-label", text: o.label });
+    if (o.badge) row.createSpan({ cls: "dida-pop-badge", text: o.badge });
+    if (o.action) {
+      const { label, run } = o.action;
+      const btn = row.createEl("button", { cls: "dida-pop-action", text: label, attr: { type: "button" } });
+      btn.addEventListener("mousedown", (e) => e.preventDefault());
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        run();
+      });
+    }
     if (o.hint) row.createSpan({ cls: "dida-pop-hint", text: o.hint });
     if (o.checked && !o.checkbox) setIcon(row.createSpan({ cls: "dida-pop-check" }), "check");
+    if (o.disabled) {
+      row.addClass("is-disabled");
+      return row;
+    }
     const index = this.items.length;
     this.items.push(row);
     row.addEventListener("mousedown", (e) => e.preventDefault());

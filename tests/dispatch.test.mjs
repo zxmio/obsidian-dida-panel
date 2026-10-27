@@ -72,3 +72,34 @@ test("队列标签的加减与判断", () => {
   assert.equal(isQueued(task, "派给AI"), true);
   assert.equal(isQueued({ ...task, tags: null }, "派给AI"), false);
 });
+
+test("派送链接：Claude Code 带指令和目录，Claude 对话只带指令，Codex 用 prompt/path，MakerPilot 不走链接", async () => {
+  const { dispatchUrl, CLAUDE_PROMPT_LIMIT } = await import("../src/dispatch/targets.ts");
+  const prompt = "请处理：写周报 50% 进度\n备注 a+b";
+  const code = new URL(dispatchUrl("claude-code", prompt, "/Users/me/Vault"));
+  assert.equal(code.protocol, "claude:");
+  assert.equal(code.host, "code");
+  assert.equal(code.pathname, "/new");
+  assert.equal(code.searchParams.get("q"), "请处理：写周报 50％ 进度\n备注 a+b");
+  assert.equal(code.searchParams.get("folder"), "/Users/me/Vault");
+
+  const chat = new URL(dispatchUrl("claude-chat", prompt, "/Users/me/Vault"));
+  assert.equal(chat.host, "claude.ai");
+  assert.equal(chat.pathname, "/new");
+  assert.equal(chat.searchParams.get("folder"), null);
+
+  const codex = new URL(dispatchUrl("codex", prompt, "/Users/me/Vault"));
+  assert.equal(codex.protocol, "codex:");
+  assert.equal(codex.host, "threads");
+  assert.equal(codex.pathname, "/new");
+  assert.equal(codex.searchParams.get("prompt"), prompt);
+  assert.equal(codex.searchParams.get("path"), "/Users/me/Vault");
+
+  assert.equal(dispatchUrl("makerpilot", prompt, ""), null);
+  assert.equal(new URL(dispatchUrl("codex", "x", "")).searchParams.has("path"), false);
+
+  const long = new URL(dispatchUrl("claude-code", "字".repeat(CLAUDE_PROMPT_LIMIT + 500), ""));
+  const q = long.searchParams.get("q");
+  assert.equal(q.length, CLAUDE_PROMPT_LIMIT);
+  assert.ok(q.endsWith("请到滴答里看完整备注）"));
+});

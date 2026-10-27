@@ -7,11 +7,14 @@ import { parseQuickAdd } from "../dida/quickAdd.ts";
 import { INBOX_ID, PRIORITIES, PRIORITY_LABEL, type DidaColumn, type DidaProject, type DidaTask, type TaskInput, type TaskSearchHit } from "../dida/types.ts";
 import { McpAuthError } from "../mcp/client.ts";
 import { isQueued } from "../dispatch/prompt.ts";
+import { targetInfo } from "../dispatch/targets.ts";
 import type { ProjectSnapshot } from "../store.ts";
 import { ConfirmModal } from "./confirm.ts";
 import { ProjectSuggestModal } from "./projectSuggest.ts";
 import { ChatDock } from "./chatDock.ts";
 import { QuickChips } from "./quickChips.ts";
+import { openDispatchPicker } from "./dispatchPicker.ts";
+import type { QuickPopover } from "./quickPopover.ts";
 import type { PromptContext } from "../agent/systemPrompt.ts";
 
 export const VIEW_TYPE_DIDA = "todaylab-dida-panel";
@@ -86,6 +89,7 @@ export class DidaPanelView extends ItemView {
   private quickValue = "";
   private quickFocused = false;
   private quickChips: QuickChips | null = null;
+  private dispatchPicker: QuickPopover | null = null;
   /** 快速添加选的分组，只对选的那个项目有效；id 为 null 是「未分组」 */
   private quickColumn: { key: string; id: string | null } | null = null;
   private dragging: DidaTask | null = null;
@@ -186,6 +190,7 @@ export class DidaPanelView extends ItemView {
     this.dock = null;
     this.quickChips?.destroy();
     this.quickChips = null;
+    this.dispatchPicker?.close();
   }
 
   /** 给底部对话框的系统提示用的当前上下文。 */
@@ -1159,7 +1164,15 @@ export class DidaPanelView extends ItemView {
     }
 
     const actions = row.createDiv({ cls: "dida-task-actions" });
-    if (task.status !== 2) this.iconButton(actions, "bot", queued ? "再派给 AI（已在队列）" : "派给 AI", () => void this.plugin.dispatchTask(task), queued ? "is-accent" : "");
+    if (task.status !== 2) {
+      const target = targetInfo(this.plugin.settings.aiTarget).label;
+      const bot = this.iconButton(actions, "bot", `${queued ? "再派给" : "派给"} ${target}（右键换一个）`, () => void this.plugin.dispatchTask(task), queued ? "is-accent" : "");
+      bot.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.openDispatchPicker(task, bot.getBoundingClientRect());
+      });
+    }
     this.iconButton(actions, "pencil", "编辑", () => this.plugin.openEditModal(task));
     this.iconButton(actions, "more-horizontal", "更多", (e) => this.taskMenu(task, e, ctx));
 
@@ -1177,7 +1190,11 @@ export class DidaPanelView extends ItemView {
     const actions = details.createDiv({ cls: "dida-detail-actions" });
     if (task.status !== 2) {
       const queued = isQueued(task, this.plugin.settings.aiTag);
-      actions.createEl("button", { text: queued ? "再派给 AI" : "派给 AI", cls: "is-dispatch" }).addEventListener("click", () => void this.plugin.dispatchTask(task));
+      const target = targetInfo(this.plugin.settings.aiTarget).label;
+      actions.createEl("button", { text: `${queued ? "再派给" : "派给"} ${target}`, cls: "is-dispatch" }).addEventListener("click", () => void this.plugin.dispatchTask(task));
+      const other = actions.createEl("button", { cls: "is-dispatch-more", attr: { "aria-label": "派给别的 AI" } });
+      setIcon(other, "chevron-down");
+      other.addEventListener("click", () => this.openDispatchPicker(task, other.getBoundingClientRect()));
       if (queued) actions.createEl("button", { text: "移出队列" }).addEventListener("click", () => void this.plugin.undispatchTask(task));
     }
     if (ctx.columns?.length) {
@@ -1206,13 +1223,19 @@ export class DidaPanelView extends ItemView {
     return menu;
   }
 
+  /** 「派给哪个 AI」面板，同一时间只开一个。 */
+  private openDispatchPicker(task: DidaTask, rect: DOMRect): void {
+    this.dispatchPicker?.close();
+    this.dispatchPicker = openDispatchPicker(this.plugin, task, this.contentEl.doc, rect);
+  }
+
   private taskMenu(task: DidaTask, e: MouseEvent, ctx: TaskRenderContext): void {
     const menu = new Menu();
     const linked = firstLinkedPath(task.content);
     if (task.status !== 2) {
       const queued = isQueued(task, this.plugin.settings.aiTag);
-      menu.addItem((i) => i.setTitle(queued ? "再派给 AI" : "派给 AI").setIcon("bot").onClick(() => void this.plugin.dispatchTask(task)));
-      menu.addItem((i) => i.setTitle(queued ? "移出 AI 队列" : "只进 AI 队列，不打开 MakerPilot").setIcon("list-plus").onClick(() => void (queued ? this.plugin.undispatchTask(task) : this.plugin.dispatchTask(task, false))));
+      const anchor = e.currentTarget instanceof HTMLElement ? e.currentTarget.getBoundingClientRect() : new DOMRect(e.clientX, e.clientY, 0, 0);
+      menu.addItem((i) => i.setTitle("派给 AI…").setIcon("bot").onClick(() => this.openDispatchPicker(task, anchor)));
       menu.addSeparator();
     }
     if (linked) menu.addItem((i) => i.setTitle("打开关联笔记").setIcon("link").onClick(() => void this.app.workspace.openLinkText(linked, "", false)));

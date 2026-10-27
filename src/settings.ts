@@ -2,6 +2,7 @@ import { Notice, PluginSettingTab, Setting, type App } from "obsidian";
 import type DidaPanelPlugin from "./main.ts";
 import type { OAuthTokens } from "./mcp/oauth.ts";
 import type { CompletedRange } from "./store.ts";
+import { DISPATCH_TARGETS, isDispatchTarget, type DispatchTarget } from "./dispatch/targets.ts";
 import { INBOX_ID } from "./dida/types.ts";
 import { DEFAULT_DISPATCH_TEMPLATE } from "./dispatch/prompt.ts";
 import { findClaudeExecutable } from "./agent/process.ts";
@@ -23,7 +24,9 @@ export interface DidaSettings {
   vaultName: string;
   hideSeparators: boolean;
   completedRange: CompletedRange;
-  /** 派给 AI：队列标签、指令模板、是否新建会话 */
+  /** 派给 AI：默认去处、Claude Code / Codex 的工作目录（空=vault）、队列标签、指令模板、是否新建会话 */
+  aiTarget: DispatchTarget;
+  aiWorkdir: string;
   aiTag: string;
   aiPromptTemplate: string;
   aiNewConversation: boolean;
@@ -45,6 +48,8 @@ export const DEFAULT_SETTINGS: DidaSettings = {
   vaultName: "",
   hideSeparators: true,
   completedRange: "today",
+  aiTarget: "makerpilot",
+  aiWorkdir: "",
   aiTag: "派给AI",
   aiPromptTemplate: DEFAULT_DISPATCH_TEMPLATE,
   aiNewConversation: true,
@@ -247,6 +252,30 @@ export class DidaSettingTab extends PluginSettingTab {
           this.plugin.settings.aiTag = value.trim() || DEFAULT_SETTINGS.aiTag;
           await this.plugin.saveSettings();
         })
+      );
+
+    new Setting(containerEl)
+      .setName("默认派给")
+      .setDesc("点任务上的机器人图标时打开哪里。任务菜单里可以临时换。Claude Code、Claude 对话需要 Claude 桌面 App，Codex 需要 ChatGPT 桌面 App；打开后只填好指令，不会自动发送。")
+      .addDropdown((dd) => {
+        for (const t of DISPATCH_TARGETS) dd.addOption(t.id, t.label);
+        dd.setValue(this.plugin.settings.aiTarget).onChange(async (value) => {
+          if (isDispatchTarget(value)) this.plugin.settings.aiTarget = value;
+          await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName("工作目录")
+      .setDesc("Claude Code 和 Codex 新会话在哪个文件夹里开。留空就是这个 vault。")
+      .addText((text) =>
+        text
+          .setPlaceholder(this.plugin.vaultPath() || "vault 所在目录")
+          .setValue(this.plugin.settings.aiWorkdir)
+          .onChange(async (value) => {
+            this.plugin.settings.aiWorkdir = value.trim();
+            await this.plugin.saveSettings();
+          })
       );
 
     new Setting(containerEl)
