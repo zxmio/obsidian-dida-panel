@@ -1,0 +1,10 @@
+{
+  "id": "todaylab-dida-panel",
+  "name": "滴答清单任务面板",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "在 Obsidian 侧栏里增删改查滴答清单待办。数据走滴答清单官方 MCP 服务，插件本身不另存一份。",
+  "author": "Todaylab",
+  "authorUrl": "",
+  "isDesktopOnly": true
+}

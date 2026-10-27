@@ -1,0 +1,320 @@
+import type { DidaApi } from "./dida/api.ts";
+import { addDays, startOfDay } from "./dida/dates.ts";
+import { INBOX_ID, isInboxId, type DidaColumn, type DidaProject, type DidaProjectGroup, type DidaTag, type DidaTask, type TaskInput } from "./dida/types.ts";
+
+export interface ProjectSnapshot {
+  project: DidaProject;
+  tasks: DidaTask[];
+  columns: DidaColumn[];
+  fetchedAt: number;
+}
+
+export interface TodaySnapshot {
+  overdue: DidaTask[];
+  today: DidaTask[];
+  completed: DidaTask[];
+  fetchedAt: number;
+}
+
+export type CompletedRange = "today" | "week" | "none";
+
+export interface ProjectCount {
+  undone: number;
+  overdue: number;
+}
+
+export interface OverviewSnapshot {
+  counts: Map<string, ProjectCount>;
+  /** 全部未完成任务，供 AI 队列这类跨项目视图用 */
+  tasks: DidaTask[];
+  totalUndone: number;
+  totalOverdue: number;
+  fetchedAt: number;
+}
+
+export interface StoreOptions {
+  hideSeparators: () => boolean;
+  completedRange: () => CompletedRange;
+}
+
+const INBOX_PROJECT: DidaProject = {
+  id: INBOX_ID,
+  name: "收件箱",
+  color: null,
+  closed: null,
+  groupId: null,
+  viewMode: "list",
+  kind: "TASK"
+};
+
+/** 名字只有方块符号的空项目是侧栏视觉分隔符，不当项目用。 */
+export function isSeparatorProject(name: string): boolean {
+  return /^[\s▫◻▪◼□■️]+$/.test(name);
+}
+
+/** 所有视图共用的内存缓存。数据源是滴答，这里只做缓存和变更后的失效。 */
+export class DidaStore {
+  projects: DidaProject[] = [];
+  groups: DidaProjectGroup[] = [];
+  tags: DidaTag[] = [];
+  today: TodaySnapshot | null = null;
+  overview: OverviewSnapshot | null = null;
+  lastRefreshAt = 0;
+
+  private projectsLoadedAt = 0;
+  private tagsLoadedAt = 0;
+  private readonly projectCache = new Map<string, ProjectSnapshot>();
+  private readonly listeners = new Set<() => void>();
+  private readonly inflight = new Map<string, Promise<unknown>>();
+
+  constructor(private readonly api: DidaApi, private readonly options: StoreOptions) {}
+
+  subscribe(fn: () => void): () => void {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
+  }
+
+  private emit(): void {
+    for (const fn of this.listeners) fn();
+  }
+
+  /** 同一个 key 的请求并发时只发一次。 */
+  private dedupe<T>(key: string, run: () => Promise<T>): Promise<T> {
+    const existing = this.inflight.get(key);
+    if (existing) return existing as Promise<T>;
+    const p = run().finally(() => this.inflight.delete(key));
+    this.inflight.set(key, p);
+    return p;
+  }
+
+  projectKey(id: string): string {
+    return isInboxId(id) ? INBOX_ID : id;
+  }
+
+  projectById(id: string | null | undefined): DidaProject | null {
+    if (!id) return null;
+    if (isInboxId(id)) return this.projects.find((p) => p.id === INBOX_ID) ?? INBOX_PROJECT;
+    return this.projects.find((p) => p.id === id) ?? null;
+  }
+
+  projectName(id: string | null | undefined): string {
+    return this.projectById(id)?.name ?? "未知项目";
+  }
+
+  groupName(groupId: string | null): string | null {
+    if (!groupId) return null;
+    return this.groups.find((g) => g.id === groupId)?.name ?? null;
+  }
+
+  tagByName(name: string): DidaTag | null {
+    const lower = name.toLowerCase();
+    return this.tags.find((t) => t.name === lower || t.name === name || t.label === name) ?? null;
+  }
+
+  async loadProjects(force = false): Promise<DidaProject[]> {
+    if (!force && this.projects.length && Date.now() - this.projectsLoadedAt < 10 * 60_000) return this.projects;
+    return this.dedupe("projects", async () => {
+      const [projects, groups] = await Promise.all([
+        this.api.listProjects(),
+        this.api.listProjectGroups().catch(() => [] as DidaProjectGroup[])
+      ]);
+      const active = projects.filter((p) => p.closed !== true);
+      const visible = this.options.hideSeparators() ? active.filter((p) => !isSeparatorProject(p.name)) : active;
+      const withInbox = visible.some((p) => p.id === INBOX_ID) ? visible : [INBOX_PROJECT, ...visible];
+      this.projects = [INBOX_PROJECT, ...withInbox.filter((p) => p.id !== INBOX_ID)];
+      this.groups = groups;
+      this.projectsLoadedAt = Date.now();
+      this.lastRefreshAt = Date.now();
+      this.emit();
+      return this.projects;
+    });
+  }
+
+  async loadTags(force = false): Promise<DidaTag[]> {
+    if (!force && this.tags.length && Date.now() - this.tagsLoadedAt < 10 * 60_000) return this.tags;
+    return this.dedupe("tags", async () => {
+      this.tags = await this.api.listTags();
+      this.tagsLoadedAt = Date.now();
+      this.emit();
+      return this.tags;
+    });
+  }
+
+  getProject(id: string): ProjectSnapshot | null {
+    return this.projectCache.get(this.projectKey(id)) ?? null;
+  }
+
+  async loadProject(id: string, force = false): Promise<ProjectSnapshot> {
+    const key = this.projectKey(id);
+    const cached = this.projectCache.get(key);
+    if (!force && cached && Date.now() - cached.fetchedAt < 60_000) return cached;
+    return this.dedupe(`project:${key}`, async () => {
+      const bundle = await this.api.getProjectWithTasks(key);
+      const snapshot: ProjectSnapshot = { ...bundle, fetchedAt: Date.now() };
+      if (key === INBOX_ID) snapshot.project = { ...snapshot.project, id: INBOX_ID, name: "收件箱" };
+      this.projectCache.set(key, snapshot);
+      this.lastRefreshAt = Date.now();
+      this.emit();
+      return snapshot;
+    });
+  }
+
+  async loadToday(force = false): Promise<TodaySnapshot> {
+    if (!force && this.today && Date.now() - this.today.fetchedAt < 60_000) return this.today;
+    return this.dedupe("today", async () => {
+      const now = new Date();
+      const range = this.options.completedRange();
+      const completedFrom = range === "today" ? startOfDay(now) : range === "week" ? addDays(startOfDay(now), -7) : null;
+      const [today, overdue, completed] = await Promise.all([
+        this.api.listTodayTasks(),
+        this.api.listOverdueTasks(now).catch(() => [] as DidaTask[]),
+        completedFrom ? this.api.listCompletedTasks(completedFrom, addDays(startOfDay(now), 1)).catch(() => [] as DidaTask[]) : Promise.resolve([] as DidaTask[])
+      ]);
+      const todayIds = new Set(today.map((t) => t.id));
+      this.today = {
+        today,
+        overdue: overdue.filter((t) => !todayIds.has(t.id)),
+        completed,
+        fetchedAt: Date.now()
+      };
+      this.lastRefreshAt = Date.now();
+      this.emit();
+      return this.today;
+    });
+  }
+
+  /** 项目总览：每个项目的未完成数与过期数，来自一次全量 filter_tasks。 */
+  async loadOverview(force = false): Promise<OverviewSnapshot> {
+    if (!force && this.overview && Date.now() - this.overview.fetchedAt < 60_000) return this.overview;
+    return this.dedupe("overview", async () => {
+      const tasks = await this.api.listAllUndoneTasks();
+      const todayStart = startOfDay(new Date()).getTime();
+      const counts = new Map<string, ProjectCount>();
+      let totalOverdue = 0;
+      for (const t of tasks) {
+        const key = this.projectKey(t.projectId);
+        const entry = counts.get(key) ?? { undone: 0, overdue: 0 };
+        entry.undone += 1;
+        const due = t.dueDate ?? t.startDate;
+        if (due) {
+          const d = new Date(due).getTime();
+          if (!Number.isNaN(d) && d < todayStart) {
+            entry.overdue += 1;
+            totalOverdue += 1;
+          }
+        }
+        counts.set(key, entry);
+      }
+      this.overview = { counts, tasks, totalUndone: tasks.length, totalOverdue, fetchedAt: Date.now() };
+      this.lastRefreshAt = Date.now();
+      this.emit();
+      return this.overview;
+    });
+  }
+
+  invalidateAll(): void {
+    this.projectCache.clear();
+    this.today = null;
+    this.overview = null;
+    this.projectsLoadedAt = 0;
+    this.tagsLoadedAt = 0;
+    this.emit();
+  }
+
+  private invalidateProject(id: string | null | undefined): void {
+    if (id) this.projectCache.delete(this.projectKey(id));
+    this.today = null;
+    this.overview = null;
+  }
+
+  private removeLocally(taskId: string): void {
+    for (const snap of this.projectCache.values()) snap.tasks = snap.tasks.filter((t) => t.id !== taskId);
+    if (this.today) {
+      this.today = {
+        ...this.today,
+        today: this.today.today.filter((t) => t.id !== taskId),
+        overdue: this.today.overdue.filter((t) => t.id !== taskId)
+      };
+    }
+  }
+
+  private replaceLocally(task: DidaTask): void {
+    const swap = (list: DidaTask[]): DidaTask[] => list.map((t) => (t.id === task.id ? task : t));
+    for (const snap of this.projectCache.values()) snap.tasks = swap(snap.tasks);
+    if (this.today) {
+      this.today = { ...this.today, today: swap(this.today.today), overdue: swap(this.today.overdue) };
+    }
+    if (this.overview) this.overview = { ...this.overview, tasks: swap(this.overview.tasks) };
+  }
+
+  /** 从所有缓存里按 id 找任务标题（给确认框用）。 */
+  taskTitle(taskId: string): string | null {
+    for (const snap of this.projectCache.values()) {
+      const hit = snap.tasks.find((t) => t.id === taskId);
+      if (hit) return hit.title;
+    }
+    for (const list of [this.overview?.tasks ?? [], this.today?.today ?? [], this.today?.overdue ?? []]) {
+      const hit = list.find((t) => t.id === taskId);
+      if (hit) return hit.title;
+    }
+    return null;
+  }
+
+  /** 打了队列标签的未完成任务（来自总览快照）。 */
+  queuedTasks(tag: string): DidaTask[] {
+    return (this.overview?.tasks ?? []).filter((t) => (t.tags ?? []).includes(tag));
+  }
+
+  /** 变更后在后台重新拉受影响的数据，面板会随之刷新。 */
+  private reloadAffected(projectIds: Array<string | null | undefined>): void {
+    for (const id of projectIds) this.invalidateProject(id);
+    void Promise.all([
+      ...projectIds.filter((id): id is string => !!id).map((id) => this.loadProject(id, true).catch(() => null)),
+      this.loadToday(true).catch(() => null)
+    ]);
+  }
+
+  async createTask(input: TaskInput): Promise<DidaTask> {
+    const task = await this.api.createTask(input);
+    this.reloadAffected([input.projectId]);
+    return task;
+  }
+
+  async updateTask(task: DidaTask, patch: Partial<TaskInput> & { status?: DidaTask["status"] }): Promise<DidaTask> {
+    const updated = await this.api.updateTask(task, patch);
+    this.replaceLocally(updated);
+    this.emit();
+    this.reloadAffected([task.projectId, patch.projectId]);
+    return updated;
+  }
+
+  async completeTask(task: DidaTask): Promise<void> {
+    this.removeLocally(task.id);
+    this.emit();
+    try {
+      await this.api.completeTask(task);
+    } finally {
+      this.reloadAffected([task.projectId]);
+    }
+  }
+
+  async deleteTask(task: DidaTask): Promise<void> {
+    this.removeLocally(task.id);
+    this.emit();
+    try {
+      await this.api.deleteTask(task);
+    } finally {
+      this.reloadAffected([task.projectId]);
+    }
+  }
+
+  async moveTask(task: DidaTask, toProjectId: string): Promise<void> {
+    this.removeLocally(task.id);
+    this.emit();
+    try {
+      await this.api.moveTask(task, toProjectId);
+    } finally {
+      this.reloadAffected([task.projectId, toProjectId]);
+    }
+  }
+}
