@@ -1,6 +1,6 @@
 import { describeDue } from "../dida/dates.ts";
 import { linkedPaths, obsidianLinksToWikilinks } from "../dida/deeplink.ts";
-import { PRIORITY_LABEL, type DidaTask } from "../dida/types.ts";
+import { PRIORITY_LABEL, taskBody, type DidaTask } from "../dida/types.ts";
 
 /**
  * 派活指令模板。占位符：
@@ -39,8 +39,8 @@ export function buildDispatchPrompt(task: DidaTask, ctx: DispatchContext): strin
   const template = ctx.template?.trim() ? ctx.template : DEFAULT_DISPATCH_TEMPLATE;
   const due = describeDue(task, ctx.now);
   const tags = ctx.tagLabels.filter((t) => t !== ctx.queueTag);
-  const paths = linkedPaths(task.content);
-  const notes = (task.content ?? task.desc ?? "").trim();
+  const paths = linkedPaths(taskBody(task));
+  const notes = taskBody(task).trim();
 
   const values: Record<string, string> = {
     title: task.title.trim(),

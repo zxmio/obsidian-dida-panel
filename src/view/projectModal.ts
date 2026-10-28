@@ -16,7 +16,6 @@ export interface ProjectModalOptions {
 
 /**
  * 新建 / 编辑项目：名称、文件夹、视图、颜色；编辑时左下角可归档。
- * 滴答的 MCP 不能把项目移出文件夹，所以已在文件夹里的项目不给「不放文件夹」。
  */
 export class ProjectModal extends Modal {
   private readonly plugin: DidaPanelPlugin;
@@ -92,13 +91,10 @@ export class ProjectModal extends Modal {
   private renderGroups(row: HTMLElement): void {
     const store = this.plugin.store;
     row.createSpan({ cls: "dida-columns-label", text: "文件夹" });
-    const canUngroup = !this.isEdit || !this.opts.project?.groupId;
-    if (canUngroup) {
-      this.pill(row, "不放文件夹", !this.groupId, () => {
-        this.groupId = null;
-        this.rerender(row, () => this.renderGroups(row));
-      }, "is-none");
-    }
+    this.pill(row, "不放文件夹", !this.groupId, () => {
+      this.groupId = null;
+      this.rerender(row, () => this.renderGroups(row));
+    }, "is-none");
     for (const g of store.groups) {
       this.pill(row, g.name, this.groupId === g.id, () => {
         this.groupId = g.id;
@@ -155,7 +151,7 @@ export class ProjectModal extends Modal {
         if (name !== project.name) patch.name = name;
         if (this.color !== project.color) patch.color = this.color;
         if (this.viewMode !== project.viewMode && this.viewMode !== "timeline") patch.viewMode = this.viewMode;
-        if (this.groupId && this.groupId !== project.groupId) patch.groupId = this.groupId;
+        if ((this.groupId ?? null) !== (project.groupId ?? null)) patch.groupId = this.groupId;
         if (Object.keys(patch).length) await store.updateProject(project.id, patch);
         new Notice(`已保存「${name}」`);
         this.opts.onDone?.(store.projectById(project.id));

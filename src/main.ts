@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { FileSystemAdapter, Notice, Plugin, type Editor, type MarkdownFileInfo, type MarkdownView, type Menu, type TFile } from "obsidian";
 import { DidaApi } from "./dida/api.ts";
 import { formatDidaDate, startOfDay } from "./dida/dates.ts";
-import { appendNoteLink } from "./dida/deeplink.ts";
-import type { DidaTask, TaskInput } from "./dida/types.ts";
+import { appendNoteLink, boundNotePath, setBodyNote, sourceNotePath, taskWebUrl } from "./dida/deeplink.ts";
+import { taskBody, type ChecklistItem, type DidaTask, type TaskInput } from "./dida/types.ts";
 import { McpAuthError, McpClient } from "./mcp/client.ts";
 import { loginWithBrowser, refreshTokens, tokensExpired } from "./mcp/oauth.ts";
 import { DEFAULT_SETTINGS, DidaSettingTab, type DidaSettings } from "./settings.ts";
@@ -20,6 +20,7 @@ import { ProjectSuggestModal } from "./view/projectSuggest.ts";
 import { TaskModal, type TaskModalOptions } from "./view/taskModal.ts";
 import { TaskSuggestModal } from "./view/taskSuggest.ts";
 import { ReviewModal } from "./view/reviewModal.ts";
+import { TagManagerModal } from "./view/tagManager.ts";
 
 export interface NoteRef {
   vault: string;
@@ -32,6 +33,8 @@ export default class DidaPanelPlugin extends Plugin {
   api!: DidaApi;
   store!: DidaStore;
   private loggingIn = false;
+  /** 铺满前左右侧栏是否收起，还原时照这个恢复；为空时还原成都展开 */
+  private sidebarsBeforeFull: { left: boolean; right: boolean } | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -173,6 +176,45 @@ export default class DidaPanelPlugin extends Plugin {
     return leaf.view instanceof DidaPanelView ? leaf.view : null;
   }
 
+  /** 面板是否开在侧栏里（不在就是主编辑区或弹出窗口） */
+  inSidebar(view: DidaPanelView): boolean {
+    const root = view.leaf.getRoot();
+    return root === this.app.workspace.leftSplit || root === this.app.workspace.rightSplit;
+  }
+
+  /**
+   * 铺满切换：侧栏里的面板挪到主编辑区并收起左右侧栏；主编辑区里的挪回右侧栏，侧栏恢复铺满前的开合。
+   * 当前页签、项目和看板模式跟着走。
+   */
+  async toggleFullscreen(view?: DidaPanelView): Promise<void> {
+    const ws = this.app.workspace;
+    const current = view ?? ws.getActiveViewOfType(DidaPanelView) ?? this.panelView() ?? (await this.activateView());
+    if (!current) return;
+    const state = current.getState();
+    const from = current.leaf;
+    if (this.inSidebar(current)) {
+      this.sidebarsBeforeFull = { left: ws.leftSplit.collapsed, right: ws.rightSplit.collapsed };
+      const leaf = ws.getLeaf("tab");
+      await leaf.setViewState({ type: VIEW_TYPE_DIDA, active: true, state });
+      from.detach();
+      ws.leftSplit.collapse();
+      ws.rightSplit.collapse();
+      void ws.revealLeaf(leaf);
+      return;
+    }
+    // 右侧栏已经有一个面板就复用它，免得开出两个
+    const docked = ws.getLeavesOfType(VIEW_TYPE_DIDA).find((l) => l !== from && l.view instanceof DidaPanelView && this.inSidebar(l.view));
+    const leaf = docked ?? ws.getRightLeaf(false);
+    if (!leaf) return;
+    await leaf.setViewState({ type: VIEW_TYPE_DIDA, active: true, state });
+    from.detach();
+    const before = this.sidebarsBeforeFull;
+    this.sidebarsBeforeFull = null;
+    if (!before?.left) ws.leftSplit.expand();
+    ws.rightSplit.expand();
+    void ws.revealLeaf(leaf);
+  }
+
   /** 在主窗格新开一个页签，用看板模式显示该项目。 */
   async openBoardInMainPane(projectId: string): Promise<void> {
     const leaf = this.app.workspace.getLeaf("tab");
@@ -299,6 +341,54 @@ export default class DidaPanelPlugin extends Plugin {
     new TaskModal(this, { prefill: { ...prefill, content: prefill.content ?? "" }, ...extra }).open();
   }
 
+  /**
+   * 给任务建一篇笔记并和它绑定：笔记属性里记下滴答待办的地址（dida），待办正文第一行写成「正文：[笔记](obsidian://…)」，
+   * 之后卡片上的笔记按钮、操作面板的「笔记」打开的都是它。建好在新页签打开。
+   */
+  async createNoteForTask(task: DidaTask): Promise<void> {
+    const body = taskBody(task);
+    const file = await this.createTaskNote({ title: task.title, body, items: task.items ?? [], webUrl: taskWebUrl(task) });
+    const note = this.noteRef(file);
+    try {
+      await this.store.updateTask(task, { content: setBodyNote(body, note.vault, note.path) });
+    } catch (error) {
+      new Notice(`笔记已建好，但写回待办失败：${this.describeError(error)}`, 6000);
+    }
+    await this.app.workspace.getLeaf("tab").openFile(file);
+    new Notice(`已建笔记「${file.basename}」`);
+  }
+
+  /**
+   * 建任务笔记的文件本身：放在来源笔记所在的文件夹（通常就是项目目录），没有来源就放在 Obsidian 设置的新笔记位置。
+   * 编辑弹窗里还没保存的新待办也走这里，那时还没有滴答地址，保存后再用 bindNoteToTask 补上。
+   */
+  async createTaskNote(t: { title: string; body: string; items: ChecklistItem[]; webUrl: string | null }): Promise<TFile> {
+    const linked = sourceNotePath(t.body) ?? boundNotePath(t.body);
+    const linkedFile = linked ? this.app.vault.getAbstractFileByPath(linked) : null;
+    const folder = linkedFile?.parent ?? this.app.fileManager.getNewFileParent("");
+    const base = (t.title || "未命名待办").replace(/[\\/:*?"<>|#^[\]]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80) || "未命名待办";
+    const dir = folder.isRoot() ? "" : `${folder.path}/`;
+    let path = `${dir}${base}.md`;
+    for (let n = 2; this.app.vault.getAbstractFileByPath(path); n++) path = `${dir}${base} ${n}.md`;
+    // 笔记正文不再抄「正文：」那一行（它指向的就是这篇笔记自己）
+    const body = t.body.replace(/^正文：.*$/m, "").trim();
+    const lines: string[] = ["---", `dida: ${t.webUrl ?? ""}`, "---", ""];
+    if (body) lines.push(body, "");
+    for (const item of t.items) lines.push(`- [${item.status === 1 ? "x" : " "}] ${item.title}`);
+    return this.app.vault.create(path, `${lines.join("\n").trimEnd()}\n`);
+  }
+
+  /** 笔记属性里记下它绑定的滴答待办 */
+  async bindNoteToTask(file: TFile, task: DidaTask): Promise<void> {
+    await this.app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
+      fm.dida = taskWebUrl(task);
+    });
+  }
+
+  openTagManager(): void {
+    new TagManagerModal(this).open();
+  }
+
   openEditModal(task: DidaTask, onDone?: (task: DidaTask) => void): void {
     new TaskModal(this, { task, onDone }).open();
   }
@@ -313,6 +403,7 @@ export default class DidaPanelPlugin extends Plugin {
 
   private registerCommands(): void {
     this.addCommand({ id: "open-panel", name: "打开任务面板", callback: () => void this.activateView() });
+    this.addCommand({ id: "toggle-fullscreen", name: "铺满 / 还原任务面板", callback: () => void this.toggleFullscreen() });
     this.addCommand({ id: "quick-add", name: "快速添加待办", callback: () => this.openCreateModal() });
     this.addCommand({
       id: "create-from-selection",
@@ -372,6 +463,7 @@ export default class DidaPanelPlugin extends Plugin {
         });
       }
     });
+    this.addCommand({ id: "manage-tags", name: "管理标签", callback: () => this.openTagManager() });
     this.addCommand({ id: "review-tasks", name: "任务体检", callback: () => this.openReview() });
     this.addCommand({ id: "sync-now", name: "立即同步", callback: () => void (this.panelView()?.refresh(true) ?? this.store.loadProjects(true)) });
     this.addCommand({ id: "login", name: "登录滴答清单", callback: () => void this.login().catch(() => null) });
@@ -410,8 +502,8 @@ export default class DidaPanelPlugin extends Plugin {
     new TaskSuggestModal(this.app, this.api, async (hit) => {
       try {
         const task = await this.api.getTask(hit.id);
-        const content = appendNoteLink(task.content, note.vault, note.path);
-        if (content === (task.content ?? "")) {
+        const content = appendNoteLink(taskBody(task), note.vault, note.path);
+        if (content === taskBody(task)) {
           new Notice("这条待办已经关联了当前笔记");
           return;
         }

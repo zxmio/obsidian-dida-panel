@@ -21,6 +21,8 @@ export interface DidaSettings {
   lastProjectId: string | null;
   /** 置顶到顶部页签栏的项目，按置顶先后排 */
   pinnedProjects: string[];
+  /** 置顶页签的自定义显示名，按项目 id；没有就用项目名 */
+  pinnedNames: Record<string, string>;
   refreshMinutes: number;
   openOnStartup: boolean;
   vaultName: string;
@@ -46,6 +48,7 @@ export const DEFAULT_SETTINGS: DidaSettings = {
   defaultView: "today",
   lastProjectId: null,
   pinnedProjects: [],
+  pinnedNames: {},
   refreshMinutes: 5,
   openOnStartup: false,
   vaultName: "",

@@ -2234,6 +2234,9 @@ button.dida-group-action:hover {
 
 .dida-task-details {
   flex-basis: 100%;
+  /* 正文里不换行的长链接会把最小宽度撑大、卡片收不回去，泳道跟着被横向滚走一截 */
+  min-width: 0;
+  overflow-wrap: anywhere;
   margin: 0 0 2px 28px;
   padding: 2px 0 2px;
   font-size: var(--dida-fs-sm);
@@ -2243,11 +2246,316 @@ button.dida-group-action:hover {
   flex-direction: column;
   gap: 8px;
 }
-.dida-task-details .dida-md p {
+/* 展开后底部的常用动作：一排小图标，左对齐贴着正文；子任务行里同样一排 */
+.dida-task-quick {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin: -2px 0 0 -6px;
+}
+.dida-task-quick button.dida-ibtn {
+  width: var(--dida-h-sm);
+  height: var(--dida-h-sm);
+  border-radius: var(--dida-r-sm);
+  color: var(--dida-text-3);
+}
+.dida-task-quick button.dida-ibtn:hover {
+  background: var(--dida-fill);
+  color: var(--dida-text);
+}
+.dida-task-quick button.dida-ibtn.is-accent {
+  color: var(--dida-accent);
+}
+.dida-task-quick button.dida-ibtn svg {
+  width: 15px;
+  height: 15px;
+}
+.dida-task.is-selecting .dida-task-quick {
+  display: none;
+}
+
+/* 任务正文的 Markdown（卡片展开、编辑弹窗预览共用）：段落紧凑，列表、任务列表、引用、代码、表格都按面板的字号收拢 */
+.dida-md > :first-child {
+  margin-top: 0;
+}
+.dida-md > :last-child {
+  margin-bottom: 0;
+}
+.dida-md p {
+  margin: 0 0 6px;
+}
+.dida-md a {
+  color: var(--dida-accent);
+  text-decoration: none;
+}
+.dida-md a:hover {
+  text-decoration: underline;
+}
+.dida-md h1,
+.dida-md h2,
+.dida-md h3,
+.dida-md h4,
+.dida-md h5,
+.dida-md h6 {
+  margin: 10px 0 4px;
+  font-size: var(--dida-fs-md);
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--dida-text);
+}
+.dida-md h1 {
+  font-size: var(--dida-fs-lg);
+}
+.dida-md ul,
+.dida-md ol {
+  margin: 2px 0 6px;
+  padding-inline-start: 20px;
+}
+.dida-md li {
+  margin: 1px 0;
+}
+.dida-md li > p {
   margin: 0;
 }
-.dida-task-details .dida-md a {
-  color: var(--dida-accent);
+/* 任务列表：去掉圆点，方形小勾选框和文字首行对齐；勾掉的划线变浅。
+   Obsidian 自带样式用逻辑属性（padding-inline-start、margin-inline-start 负值）把勾选框推到左边，
+   这里同样用逻辑属性、并提高选择器优先级压过去，不然勾选框会跑到文字左边二十多像素外。
+   列表项之间有空行时（松散列表）勾选框会包在 <p> 里，两种结构都要管 */
+.dida-md ul.contains-task-list,
+.dida-md li.task-list-item {
+  list-style: none;
+}
+.dida-md ul.contains-task-list {
+  padding-inline-start: 0;
+}
+.dida-md ul.contains-task-list ul.contains-task-list {
+  padding-inline-start: 22px;
+}
+.dida-md ul.contains-task-list > li.task-list-item {
+  position: relative;
+  margin-inline-start: 0;
+  padding-inline-start: 24px;
+  /* 空的待办项（「- [ ] 」后面没字）也要占一行，不然勾选框和下一项叠在一起 */
+  min-height: 1.7em;
+}
+.dida-md li.task-list-item::before,
+.dida-md li.task-list-item > .list-bullet {
+  display: none;
+}
+.dida-md ul.contains-task-list > li.task-list-item > input.task-list-item-checkbox,
+.dida-md ul.contains-task-list > li.task-list-item > p > input.task-list-item-checkbox {
+  appearance: none;
+  -webkit-appearance: none;
+  position: absolute;
+  inset-inline-start: 0;
+  top: 0.25em;
+  /* 和检查项的勾选框一样大，圆角一致 */
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  margin-inline-start: 0;
+  border: 1.5px solid var(--dida-check-line);
+  border-radius: var(--dida-r-xs);
+  background: var(--dida-surface-raised);
+  box-shadow: none;
+  cursor: pointer;
+}
+.dida-md ul.contains-task-list > li.task-list-item > input.task-list-item-checkbox:disabled,
+.dida-md ul.contains-task-list > li.task-list-item > p > input.task-list-item-checkbox:disabled {
+  cursor: default;
+}
+.dida-md ul.contains-task-list > li.task-list-item > input.task-list-item-checkbox:checked,
+.dida-md ul.contains-task-list > li.task-list-item > p > input.task-list-item-checkbox:checked {
+  background: var(--dida-text-3);
+  border-color: var(--dida-text-3);
+}
+.dida-md ul.contains-task-list > li.task-list-item > input.task-list-item-checkbox:checked::after,
+.dida-md ul.contains-task-list > li.task-list-item > p > input.task-list-item-checkbox:checked::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1.5px;
+  width: 3.5px;
+  height: 7px;
+  border: solid var(--dida-on-accent);
+  border-width: 0 1.6px 1.6px 0;
+  transform: rotate(45deg);
+}
+.dida-md li.task-list-item.is-checked {
+  color: var(--dida-text-3);
+  text-decoration: line-through;
+}
+.dida-md blockquote {
+  margin: 4px 0 6px;
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid var(--dida-line);
+  color: var(--dida-text-2);
+}
+.dida-md code {
+  padding: 1px 4px;
+  border-radius: var(--dida-r-xs);
+  background: var(--dida-fill);
+  font-size: 0.92em;
+}
+.dida-md pre {
+  margin: 4px 0 6px;
+  padding: 8px 10px;
+  border-radius: var(--dida-r-sm);
+  background: var(--dida-fill);
+  overflow-x: auto;
+}
+.dida-md pre code {
+  padding: 0;
+  background: transparent;
+}
+.dida-md hr {
+  margin: 8px 0;
+  border: 0;
+  border-top: 1px solid var(--dida-line);
+}
+.dida-md table {
+  border-collapse: collapse;
+  margin: 4px 0 6px;
+  font-size: var(--dida-fs-sm);
+}
+.dida-md th,
+.dida-md td {
+  padding: 3px 8px;
+  border: 1px solid var(--dida-line);
+}
+.dida-md img {
+  max-width: 100%;
+  border-radius: var(--dida-r-sm);
+}
+
+/* 编辑弹窗里的检查项：一行一项，勾选 + 可改的文字 + 悬停露出删除；最后一行追加 */
+.dida-tm-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dida-tm-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--dida-h-md);
+  padding: 0 6px 0 10px;
+  border-radius: var(--dida-r-sm);
+}
+.dida-tm-item:hover,
+.dida-tm-item:focus-within {
+  background: var(--dida-fill);
+}
+.dida-tm-item .dida-checklist-box {
+  margin: 0;
+}
+.dida-modal input.dida-tm-item-input {
+  flex: 1;
+  min-width: 0;
+  height: var(--dida-h-md);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: var(--dida-fs-sm);
+  color: var(--dida-text);
+}
+.dida-modal input.dida-tm-item-input:focus {
+  box-shadow: none;
+}
+.dida-tm-item.is-done input.dida-tm-item-input {
+  color: var(--dida-text-3);
+  text-decoration: line-through;
+}
+.dida-modal button.dida-tm-item-del {
+  flex: none;
+  width: var(--dida-h-xs);
+  height: var(--dida-h-xs);
+  padding: 0;
+  border: 0;
+  border-radius: var(--dida-r-xs);
+  background: transparent;
+  box-shadow: none;
+  color: var(--dida-text-3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  cursor: pointer;
+}
+.dida-tm-item:hover .dida-tm-item-del,
+.dida-tm-item:focus-within .dida-tm-item-del {
+  opacity: 1;
+}
+.dida-modal button.dida-tm-item-del:hover {
+  background: var(--dida-fill-strong);
+  color: var(--dida-text);
+}
+.dida-tm-item-del svg,
+.dida-tm-item-plus svg {
+  width: 14px;
+  height: 14px;
+}
+.dida-tm-item-plus {
+  flex: none;
+  width: 16px;
+  display: inline-flex;
+  justify-content: center;
+  color: var(--dida-text-3);
+}
+.dida-modal input.dida-tm-item-input::placeholder {
+  color: var(--dida-text-3);
+}
+
+/* 清单型任务的检查项：方形小勾选框，和滴答 App 一致；勾掉的划线变浅 */
+.dida-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dida-checklist-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 3px 0;
+  color: var(--dida-text);
+  cursor: pointer;
+}
+.dida-checklist-item.is-done .dida-checklist-title {
+  color: var(--dida-text-3);
+  text-decoration: line-through;
+}
+:is(.dida-panel, .dida-modal) input.dida-checklist-box {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 3px 0 0;
+  border-radius: var(--dida-r-xs);
+  border: 1.5px solid var(--dida-check-line);
+  background: var(--dida-surface-raised);
+  box-shadow: none;
+  position: relative;
+  cursor: pointer;
+}
+:is(.dida-panel, .dida-modal) input.dida-checklist-box:checked {
+  background: var(--dida-text-3);
+  border-color: var(--dida-text-3);
+}
+:is(.dida-panel, .dida-modal) input.dida-checklist-box:checked::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1.5px;
+  width: 3.5px;
+  height: 7px;
+  border: solid var(--dida-on-accent);
+  border-width: 0 1.6px 1.6px 0;
+  transform: rotate(45deg);
+}
+:is(.dida-panel, .dida-modal) input.dida-checklist-box:disabled {
+  cursor: default;
 }
 
 /* ---------- 看板 ---------- */
@@ -2296,6 +2604,10 @@ button.dida-group-action:hover {
   overflow-x: auto;
   overflow-y: hidden;
   scroll-snap-type: x proximity;
+  /* 卡片区左右各伸出 4px 给投影留位，横向滚动容器会把它裁掉：这里补回 4px，再用负外边距抵消，泳道位置不变 */
+  padding: 0 4px;
+  margin: 0 -4px;
+  scroll-padding-inline: 4px;
 }
 /* 泳道（照设计稿）：没有底色，标题一行小字，卡片直接浮在页面底上 */
 .dida-lane {
@@ -2375,6 +2687,8 @@ button.dida-group-action:hover {
   flex-direction: column;
   gap: 6px;
   overflow-y: auto;
+  /* 只竖着滚；横向就算有东西超出也不让整列卡片被滚走 */
+  overflow-x: hidden;
   min-height: 0;
   /* 给卡片投影留位置，避免被滚动容器裁掉 */
   padding: 2px 4px 12px;
@@ -2704,17 +3018,26 @@ button.dida-group-action:hover {
   color: var(--dida-accent-strong);
   font-weight: 500;
 }
+/* 正文区：底色和边框画在外框上，里面是预览或输入框；下面一排是来源、插入笔记、创建笔记 */
 .dida-note {
-  position: relative;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid transparent;
+  border-radius: var(--dida-r-lg);
+  background: var(--dida-fill);
+}
+.dida-note:focus-within {
+  background: var(--dida-surface);
+  border-color: color-mix(in srgb, var(--dida-accent) 50%, transparent);
 }
 .dida-modal textarea.dida-note-input {
   width: 100%;
   box-sizing: border-box;
-  min-height: 160px;
-  border: 1px solid transparent;
+  min-height: 140px;
+  border: 0;
   border-radius: var(--dida-r-lg);
-  background: var(--dida-fill);
-  padding: 14px 14px 40px;
+  background: transparent;
+  padding: 14px;
   font-family: inherit;
   font-size: var(--dida-fs-sm);
   line-height: 1.7;
@@ -2723,47 +3046,58 @@ button.dida-group-action:hover {
   box-shadow: none;
 }
 .dida-modal textarea.dida-note-input:focus {
-  background: var(--dida-surface);
-  border-color: color-mix(in srgb, var(--dida-accent) 50%, transparent);
+  background: transparent;
   box-shadow: none;
 }
-.dida-modal textarea.dida-note-input::placeholder {
-  color: var(--dida-text-3);
+.dida-note-view {
+  display: none;
+  min-height: 140px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 14px;
+  font-size: var(--dida-fs-sm);
+  line-height: 1.7;
+  color: var(--dida-text);
+  overflow-wrap: anywhere;
+  cursor: text;
 }
-.dida-modal button.dida-linkbtn {
-  position: absolute;
-  right: 10px;
-  bottom: 10px;
+.dida-note.is-preview .dida-note-view {
+  display: block;
+}
+.dida-note.is-preview textarea.dida-note-input {
+  display: none;
+}
+.dida-note-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: -6px;
+}
+.dida-modal button.dida-note-tool {
   height: var(--dida-h-sm);
   padding: 0 10px;
   border: 0;
   border-radius: var(--dida-r-md);
   background: transparent;
+  box-shadow: none;
   font-size: var(--dida-fs-sm);
-  color: var(--dida-accent);
+  color: var(--dida-text-2);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  box-shadow: none;
 }
-.dida-modal button.dida-linkbtn:hover {
-  background: var(--dida-accent-soft);
-  color: var(--dida-accent-strong);
+.dida-modal button.dida-note-tool:hover {
+  background: var(--dida-fill);
+  color: var(--dida-text);
 }
-.dida-modal button.dida-linkbtn {
-  max-width: calc(100% - 20px);
+.dida-modal button.dida-note-tool svg {
+  width: 14px;
+  height: 14px;
+  color: var(--dida-text-3);
 }
-.dida-modal button.dida-linkbtn span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.dida-modal button.dida-linkbtn svg {
-  flex: none;
-  width: 12px;
-  height: 12px;
+.dida-modal textarea.dida-note-input::placeholder {
+  color: var(--dida-text-3);
 }
 
 .dida-form-footer {
@@ -3305,8 +3639,36 @@ button.dida-group-action.is-more svg {
 .dida-modal .dida-form-footer button.is-ghost-danger:hover {
   color: var(--dida-red);
 }
-.dida-panel button.dida-ov-new {
+.dida-ov-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   margin-top: 14px;
+}
+.dida-ov-foot button.dida-ov-new {
+  margin-top: 0;
+}
+/* 文件夹标题的「···」悬停才露出 */
+.dida-ov-group-head button.dida-ov-group-more {
+  flex: none;
+  width: var(--dida-h-xs);
+  height: var(--dida-h-xs);
+  opacity: 0;
+}
+.dida-ov-group-head:hover button.dida-ov-group-more,
+.dida-ov-group-head button.dida-ov-group-more:focus-visible {
+  opacity: 1;
+}
+
+/* 重复任务的小图标，悬停显示规则 */
+.dida-repeat {
+  display: inline-flex;
+  align-items: center;
+  color: var(--dida-text-3);
+}
+.dida-repeat svg {
+  width: 12px;
+  height: 12px;
 }
 
 /* 子任务：行内进度小标，展开卡片里的添加输入框 */
@@ -3390,4 +3752,165 @@ button.dida-group-action.is-more svg {
 /* 子任务进度可以点：点了展开父任务 */
 .dida-subcount:hover {
   color: var(--dida-text);
+}
+
+/* ---------- 多选与批量操作 ---------- */
+
+/* 多选时任务行整行可点；选中的行浅强调底 + 圈里打勾 */
+.dida-task.is-selecting {
+  cursor: pointer;
+}
+.dida-task.is-selecting .dida-task-actions {
+  display: none;
+}
+.dida-task.is-selected {
+  background: var(--dida-accent-soft);
+  box-shadow: inset 0 0 0 1px var(--dida-accent-line);
+}
+.dida-panel .dida-task.is-selected > input.dida-check {
+  background: var(--dida-accent);
+  border-color: var(--dida-accent);
+}
+.dida-panel .dida-task.is-selected > input.dida-check::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1.5px;
+  width: 3.5px;
+  height: 7px;
+  border: solid var(--dida-on-accent);
+  border-width: 0 1.6px 1.6px 0;
+  transform: rotate(45deg);
+}
+.dida-batch {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 12px 8px;
+  padding: 6px 8px 6px 14px;
+  border-radius: var(--dida-r-lg);
+  background: var(--dida-surface-raised);
+  box-shadow: var(--dida-e1);
+  font-size: var(--dida-fs-sm);
+}
+.dida-batch-count {
+  color: var(--dida-text);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.dida-panel button.dida-batch-link {
+  height: var(--dida-h-xs);
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--dida-r-xs);
+  background: transparent;
+  box-shadow: none;
+  font-size: var(--dida-fs-sm);
+  color: var(--dida-accent);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.dida-panel button.dida-batch-link:hover {
+  background: var(--dida-accent-soft);
+}
+.dida-batch-actions {
+  flex: 1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 2px;
+}
+.dida-batch-actions button.dida-ibtn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.dida-batch-actions button.dida-ibtn.is-danger:not(:disabled):hover {
+  color: var(--dida-red);
+}
+
+/* ---------- 标签管理 ---------- */
+
+.dida-tagm-hint {
+  margin: 0 0 10px;
+  font-size: var(--dida-fs-sm);
+  color: var(--dida-text-3);
+}
+.dida-tagm-empty {
+  padding: 24px 0;
+  text-align: center;
+  color: var(--dida-text-3);
+}
+.dida-tagm-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.dida-tagm-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--dida-h-md);
+  padding: 0 4px 0 10px;
+  border-radius: var(--dida-r-sm);
+}
+.dida-tagm-row:hover {
+  background: var(--dida-fill);
+}
+.dida-tagm-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--dida-r-full);
+  background: var(--dida-text-3);
+}
+.dida-tagm-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dida-text);
+}
+.dida-tagm-parent {
+  font-size: var(--dida-fs-xs);
+  color: var(--dida-text-3);
+}
+.dida-modal input.dida-tagm-input {
+  flex: 1;
+  min-width: 0;
+  height: var(--dida-h-sm);
+  font-size: var(--dida-fs-md);
+}
+.dida-modal button.dida-tagm-btn {
+  flex: none;
+  height: var(--dida-h-xs);
+  min-width: var(--dida-h-xs);
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--dida-r-xs);
+  background: transparent;
+  box-shadow: none;
+  color: var(--dida-text-3);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--dida-fs-sm);
+  cursor: pointer;
+}
+.dida-modal button.dida-tagm-btn svg {
+  width: 14px;
+  height: 14px;
+}
+.dida-modal button.dida-tagm-btn:hover {
+  background: var(--dida-fill-strong);
+  color: var(--dida-text);
+}
+.dida-modal button.dida-tagm-btn.is-danger:hover,
+.dida-modal button.dida-tagm-btn.is-armed {
+  color: var(--dida-red);
+}
+.dida-modal button.dida-tagm-btn.is-armed {
+  background: var(--dida-red-soft);
 }

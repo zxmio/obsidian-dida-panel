@@ -39,6 +39,14 @@ export interface DidaTag {
   parent: string | null;
 }
 
+/** 清单型任务（kind 为 CHECKLIST）里的检查项；status 0 未完成、1 已完成 */
+export interface ChecklistItem {
+  id: string;
+  title: string;
+  status: 0 | 1;
+  sortOrder: number;
+}
+
 export interface DidaTask {
   id: string;
   projectId: string;
@@ -58,6 +66,8 @@ export interface DidaTask {
   childIds: string[] | null;
   etag: string | null;
   kind: "TEXT" | "NOTE" | "CHECKLIST" | null;
+  /** 检查项，只有清单型任务有 */
+  items?: ChecklistItem[];
   completedTime: string | null;
   createdTime?: string | null;
   modifiedTime?: string | null;
@@ -87,6 +97,19 @@ export interface TaskInput {
   timeZone?: string;
   /** 建成某条任务的子任务 */
   parentId?: string | null;
+  /** 清单型任务的检查项，改的时候整组传回去 */
+  items?: ChecklistItem[];
+  /** 重复规则（RRULE:…）；空字符串是取消重复 */
+  repeatFlag?: string;
+}
+
+/**
+ * 任务正文。滴答的清单型任务（CHECKLIST）正文存在 desc，其余存在 content；
+ * 有的任务两边都写过，以该类型对应的那个为准，空了再看另一个。
+ */
+export function taskBody(task: Pick<DidaTask, "kind" | "content" | "desc">): string {
+  const [main, other] = task.kind === "CHECKLIST" ? [task.desc, task.content] : [task.content, task.desc];
+  return main?.trim() ? main : (other ?? "");
 }
 
 export const PRIORITY_LABEL: Record<Priority, string> = { 0: "无", 1: "低", 3: "中", 5: "高" };

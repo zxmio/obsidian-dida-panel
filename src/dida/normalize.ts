@@ -1,5 +1,5 @@
 import { isRecord } from "../mcp/protocol.ts";
-import { INBOX_ID, isInboxId, toPriority, type DidaColumn, type DidaProject, type DidaProjectGroup, type DidaTag, type DidaTask, type TaskSearchHit } from "./types.ts";
+import { INBOX_ID, isInboxId, toPriority, type ChecklistItem, type DidaColumn, type DidaProject, type DidaProjectGroup, type DidaTag, type DidaTask, type TaskSearchHit } from "./types.ts";
 
 /**
  * 滴答 MCP 各工具的返回结构并不统一：有的包一层 {result:[…]}，有的直接给对象，
@@ -38,6 +38,15 @@ function strList(v: unknown): string[] | null {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : null;
 }
 
+function normalizeItem(i: Record<string, unknown>): ChecklistItem {
+  return {
+    id: str(i.id) ?? "",
+    title: str(i.title) ?? "",
+    status: i.status === 1 || i.status === 2 ? 1 : 0,
+    sortOrder: typeof i.sortOrder === "number" ? i.sortOrder : 0
+  };
+}
+
 export function normalizeTask(raw: Record<string, unknown>): DidaTask {
   const t = camelize(raw) as Record<string, unknown>;
   const status = t.status === 2 ? 2 : t.status === -1 ? -1 : 0;
@@ -61,6 +70,7 @@ export function normalizeTask(raw: Record<string, unknown>): DidaTask {
     childIds: strList(t.childIds),
     etag: str(t.etag),
     kind,
+    items: Array.isArray(t.items) ? t.items.filter(isRecord).map(normalizeItem).sort((a, b) => a.sortOrder - b.sortOrder) : undefined,
     completedTime: str(t.completedTime),
     createdTime: str(t.createdTime),
     modifiedTime: str(t.modifiedTime),

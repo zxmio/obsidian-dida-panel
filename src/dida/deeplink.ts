@@ -6,6 +6,11 @@ export function obsidianOpenUrl(vault: string, path: string): string {
   return `obsidian://open?vault=${encodeURIComponent(vault)}&file=${encodeURIComponent(path)}`;
 }
 
+/** 滴答网页版里这条任务的地址 */
+export function taskWebUrl(task: { id: string; projectId: string }): string {
+  return `https://dida365.com/webapp/#p/${task.projectId}/tasks/${task.id}`;
+}
+
 export function noteLinkMarkdown(vault: string, path: string, display: string = path): string {
   return `[${display}](${obsidianOpenUrl(vault, path)})`;
 }
@@ -56,6 +61,57 @@ export function obsidianLinksToWikilinks(content: string): string {
       return _m;
     }
   });
+}
+
+/*
+ * 正文里三种笔记链接，各管一件事：
+ * - 正文：这条待办自己的工作笔记，一条待办只绑一篇。卡片上的笔记按钮、操作面板的「笔记」打开的就是它。
+ * - 来源：这条待办是从哪篇笔记里来的（会议纪要、复盘），也只有一条，换来源就替换。
+ * - 关联：其它参考笔记，可以有很多条，往末尾追加。
+ */
+
+/** 某种标签行（正文：/ 来源：）里链接指向的路径 */
+function labeledPath(content: string | null | undefined, label: string): string | null {
+  if (!content) return null;
+  const line = new RegExp(`^${label}：.*$`, "m").exec(content);
+  return line ? firstLinkedPath(line[0]) : null;
+}
+
+/** 待办绑定的笔记：「正文：」那一行的；没有就退回正文里第一条笔记链接（老数据只有「来源：」时也能打开点东西） */
+export function boundNotePath(content: string | null | undefined): string | null {
+  return labeledPath(content, "正文") ?? firstLinkedPath(content);
+}
+
+/** 来源笔记的路径；没有「来源：」行时为空 */
+export function sourceNotePath(content: string | null | undefined): string | null {
+  return labeledPath(content, "来源");
+}
+
+/** 把某种标签行换成新的链接；没有这一行时，正文行放最前面、来源行放最后面 */
+function setLabeledLine(content: string | null | undefined, label: "正文" | "来源", line: string): string {
+  const current = content ?? "";
+  const re = new RegExp(`^${label}：.*$`, "m");
+  if (re.test(current)) return current.replace(re, line);
+  if (!current.trim()) return line;
+  return label === "正文" ? `${line}\n${current.replace(/^\s+/, "")}` : `${current.replace(/\s+$/, "")}\n${line}`;
+}
+
+/** 绑定待办自己的笔记：写成第一行「正文：[路径](url)」，已有正文行（含「正文：待建」）就替换 */
+export function setBodyNote(content: string | null | undefined, vault: string, path: string): string {
+  return setLabeledLine(content, "正文", noteContentLine(vault, path));
+}
+
+/** 设来源：「来源：[文件名](url)」，已有来源行就替换 */
+export function setSourceNote(content: string | null | undefined, vault: string, path: string): string {
+  return setLabeledLine(content, "来源", `来源：${noteLinkMarkdown(vault, path, path.split("/").pop() ?? path)}`);
+}
+
+/** 加一条关联笔记：末尾追加「关联：[文件名](url)」，同一篇已经在正文里就不重复加 */
+export function appendRelatedNote(content: string | null | undefined, vault: string, path: string): string {
+  const current = content ?? "";
+  if (current.includes(obsidianOpenUrl(vault, path))) return current;
+  const line = `关联：${noteLinkMarkdown(vault, path, path.split("/").pop() ?? path)}`;
+  return current.trim() ? `${current.replace(/\s+$/, "")}\n${line}` : line;
 }
 
 /**

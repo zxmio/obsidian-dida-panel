@@ -55,6 +55,43 @@ export function localTimeZone(): string {
   }
 }
 
+export interface TaskDates {
+  startDate: string;
+  dueDate: string;
+  isAllDay: boolean;
+}
+
+/**
+ * 给任务换日期时算出新的开始、结束。滴答的时间段任务（16:00–17:00、跨几天的全天任务）开始和结束不同，
+ * 只改一头会把时长丢掉，所以按原来的时长把结束跟着挪。
+ * allDay 不传：只换日子，原来的时刻和全天与否都保留；传了就按 next 本身的时刻（全天时忽略时刻）。
+ * next 为空是清除日期。
+ */
+export function rescheduleDates(
+  task: { startDate: string | null; dueDate: string | null; isAllDay: boolean | null },
+  next: Date | null,
+  allDay?: boolean
+): TaskDates {
+  if (!next) return { startDate: CLEAR_DATE, dueDate: CLEAR_DATE, isAllDay: true };
+  const oldStart = parseDidaDate(task.startDate ?? task.dueDate);
+  const oldDue = parseDidaDate(task.dueDate ?? task.startDate);
+  const oldAllDay = task.isAllDay !== false;
+  let start: Date;
+  let nextAllDay: boolean;
+  if (allDay === undefined) {
+    nextAllDay = oldStart ? oldAllDay : true;
+    start = startOfDay(next);
+    if (oldStart && !nextAllDay) start.setHours(oldStart.getHours(), oldStart.getMinutes(), 0, 0);
+  } else {
+    nextAllDay = allDay;
+    start = allDay ? startOfDay(next) : new Date(next);
+  }
+  // 全天与否变了，原来的时长就不再有意义（比如定时的一小时改成全天），只留单点
+  const span = oldStart && oldDue && oldAllDay === nextAllDay ? Math.max(0, oldDue.getTime() - oldStart.getTime()) : 0;
+  const due = new Date(start.getTime() + span);
+  return { startDate: formatDidaDate(start, nextAllDay), dueDate: formatDidaDate(due, nextAllDay), isAllDay: nextAllDay };
+}
+
 export type DueState = "none" | "overdue" | "today" | "tomorrow" | "future";
 
 export interface DueInfo {
@@ -71,7 +108,11 @@ export function describeDue(
   const d = parseDidaDate(task.dueDate ?? task.startDate);
   if (!d) return { state: "none", label: "", date: null };
   const diff = dayDiff(now, d);
-  const time = task.isAllDay ? "" : `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const start = parseDidaDate(task.startDate);
+  const hm = (x: Date): string => `${pad(x.getHours())}:${pad(x.getMinutes())}`;
+  // 同一天里的时间段显示成 16:00–17:00
+  const range = !!start && start.getTime() < d.getTime() && dayDiff(start, d) === 0;
+  const time = task.isAllDay ? "" : range && start ? `${hm(start)}–${hm(d)}` : hm(d);
   const withTime = (day: string): string => (time ? `${day} ${time}` : day);
   if (diff < 0) {
     const label = diff === -1 ? "昨天" : diff > -7 ? `${-diff} 天前` : `${d.getMonth() + 1}月${d.getDate()}日`;

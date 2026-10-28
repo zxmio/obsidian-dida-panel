@@ -1,4 +1,4 @@
-import { PRIORITY_LABEL, type DidaTask, type Priority } from "../dida/types.ts";
+import { PRIORITY_LABEL, taskBody, type DidaTask, type Priority } from "../dida/types.ts";
 
 /**
  * 任务体检：把待审任务压成一份紧凑清单交给 Claude，按 JSON Schema 拿回「问题 + 处理选项」，
@@ -105,7 +105,7 @@ export function compactTasks(tasks: DidaTask[], projectName: (id: string) => str
     const idle = idleDays(t, now);
     if (idle !== null) row.未动天数 = idle;
     if (t.repeatFlag) row.重复 = true;
-    const note = excerpt(t.content ?? t.desc, 80);
+    const note = excerpt(taskBody(t), 80);
     if (note) row.备注 = note;
     return JSON.stringify(row);
   });

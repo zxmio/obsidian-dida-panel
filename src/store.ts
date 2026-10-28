@@ -466,6 +466,65 @@ export class DidaStore {
     setTimeout(() => void this.loadProjects(true).catch(() => null), 4000);
   }
 
+  // ---------- 项目文件夹 ----------
+
+  async createGroup(name: string): Promise<DidaProjectGroup> {
+    const group = await this.api.createProjectGroup(name);
+    this.groups = [...this.groups.filter((g) => g.id !== group.id), group];
+    this.emit();
+    return group;
+  }
+
+  async renameGroup(groupId: string, name: string): Promise<void> {
+    await this.api.renameProjectGroup(groupId, name);
+    this.groups = this.groups.map((g) => (g.id === groupId ? { ...g, name } : g));
+    this.emit();
+  }
+
+  /** 删文件夹，里面的项目留着、改成不在文件夹里 */
+  async deleteGroup(groupId: string): Promise<void> {
+    await this.api.deleteProjectGroup(groupId);
+    this.groups = this.groups.filter((g) => g.id !== groupId);
+    this.projects = this.projects.map((p) => (p.groupId === groupId ? { ...p, groupId: null } : p));
+    this.emit();
+    setTimeout(() => void this.loadProjects(true).catch(() => null), 4000);
+  }
+
+  // ---------- 标签 ----------
+
+  /** 标签改名、删除会改到所有带这个标签的任务，手上的任务缓存全部作废重拉 */
+  async renameTag(name: string, newName: string): Promise<void> {
+    await this.api.renameTag(name, newName);
+    await this.afterTagChange();
+  }
+
+  async deleteTag(name: string): Promise<void> {
+    await this.api.deleteTag(name);
+    await this.afterTagChange();
+  }
+
+  private async afterTagChange(): Promise<void> {
+    const projectIds = Array.from(this.projectCache.keys());
+    this.tagsLoadedAt = 0;
+    await this.loadTags(true).catch(() => null);
+    this.reloadAffected(projectIds);
+  }
+
+  // ---------- 批量 ----------
+
+  /** 多条一起改：先在本地套上改动立刻显示，再一次提交给滴答，最后重拉涉及的项目 */
+  async batchUpdate(tasks: DidaTask[], patchOf: (task: DidaTask) => Partial<TaskInput>): Promise<void> {
+    if (!tasks.length) return;
+    const updates = tasks.map((task) => ({ task, patch: patchOf(task) }));
+    for (const { task, patch } of updates) this.replaceLocally({ ...task, ...stripUndefined(patch), etag: null } as DidaTask);
+    this.emit();
+    try {
+      await this.api.batchUpdateTasks(updates);
+    } finally {
+      this.reloadAffected([...new Set(tasks.map((t) => t.projectId))]);
+    }
+  }
+
   /**
    * 新建分组。不给位置就排在最后；给了 before / after 就插在那个分组的左边 / 右边（取两侧排序值的中点）。
    * 先插进本地缓存，几秒后再从滴答对一次账（读接口会滞后）。

@@ -2,7 +2,7 @@ import { Modal, Notice, setIcon } from "obsidian";
 import type DidaPanelPlugin from "../main.ts";
 import { findClaudeExecutable } from "../agent/process.ts";
 import { runStructured } from "../agent/oneShot.ts";
-import { CLEAR_DATE, formatDidaDate } from "../dida/dates.ts";
+import { rescheduleDates } from "../dida/dates.ts";
 import { INBOX_ID, type DidaTask } from "../dida/types.ts";
 import {
   REVIEW_ISSUES,
@@ -19,7 +19,6 @@ import {
   type ReviewProjectRef,
   type ReviewResult
 } from "../review/review.ts";
-import { ConfirmModal } from "./confirm.ts";
 
 /** null = 全部未完成任务；否则是项目 id（收件箱用 INBOX_ID）。 */
 export type ReviewScope = string | null;
@@ -37,7 +36,7 @@ interface FindingState {
 
 /**
  * 任务体检：选范围 → Claude 审一遍 → 逐条给处理选项。
- * 选项由插件直接调滴答接口执行；删除仍弹确认框。
+ * 选项由插件直接调滴答接口执行。
  */
 export class ReviewModal extends Modal {
   private reviewScope: ReviewScope;
@@ -185,10 +184,6 @@ export class ReviewModal extends Modal {
     const store = this.plugin.store;
     const task = state.task;
     const action: ReviewAction = option.action;
-    if (action.type === "delete") {
-      const ok = await ConfirmModal.ask(this.app, "删除待办", `「${task.title}」会从滴答清单里彻底删除，不可恢复。`, "删除", true);
-      if (!ok) return;
-    }
     state.busy = true;
     state.error = null;
     this.render();
@@ -204,8 +199,8 @@ export class ReviewModal extends Modal {
           state.task = await store.updateTask(task, { columnId: action.columnId });
           break;
         case "set_date": {
-          const when = action.date ? formatDidaDate(new Date(`${action.date}T00:00:00`), true) : CLEAR_DATE;
-          state.task = await store.updateTask(task, { startDate: when, dueDate: when, isAllDay: true });
+          // 只换日子，原来的时刻和时间段留着
+          state.task = await store.updateTask(task, rescheduleDates(task, action.date ? new Date(`${action.date}T00:00:00`) : null));
           break;
         }
         case "set_priority":
@@ -252,7 +247,7 @@ export class ReviewModal extends Modal {
       case "complete":
         return "标记完成";
       case "delete":
-        return "彻底删除（会再确认一次）";
+        return "删除";
       case "dispatch":
         return `打上「${this.plugin.settings.aiTag}」标签，进 AI 队列`;
     }

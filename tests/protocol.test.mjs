@@ -57,3 +57,55 @@ test("非法优先级归为 0，result 包装被拆掉", () => {
   assert.deepEqual(unwrapResult({ result: [1], extra: 1 }), { result: [1], extra: 1 });
   assert.deepEqual(camelize({ a_b: { c_d: 1 } }), { aB: { cD: 1 } });
 });
+
+test("清单型任务：检查项按顺序归一化，正文取 desc", async () => {
+  const { taskBody } = await import("../src/dida/types.ts");
+  const t = normalizeTask({
+    id: "a",
+    title: "清单",
+    kind: "CHECKLIST",
+    content: "",
+    desc: "来源：[笔记](obsidian://open?vault=V&file=a.md)",
+    items: [
+      { id: "2", title: "第二", status: 1, sortOrder: 1 },
+      { id: "1", title: "第一", status: 0, sortOrder: 0 }
+    ]
+  });
+  assert.deepEqual(t.items?.map((i) => [i.id, i.status]), [["1", 0], ["2", 1]]);
+  assert.equal(taskBody(t), "来源：[笔记](obsidian://open?vault=V&file=a.md)");
+  assert.equal(taskBody({ kind: "TEXT", content: "正文", desc: null }), "正文");
+  assert.equal(taskBody({ kind: "TEXT", content: null, desc: "只有描述" }), "只有描述");
+});
+
+test("换日期保留时间段", async () => {
+  const { rescheduleDates, describeDue } = await import("../src/dida/dates.ts");
+  const task = { startDate: "2026-11-02T16:00:00+0800", dueDate: "2026-11-02T17:00:00+0800", isAllDay: false };
+  // 只换日子：时刻和一小时时长都留着
+  const moved = rescheduleDates(task, new Date(2026, 10, 5));
+  assert.equal(new Date(moved.startDate).getHours(), 16);
+  assert.equal(new Date(moved.dueDate).getTime() - new Date(moved.startDate).getTime(), 3600_000);
+  assert.equal(moved.isAllDay, false);
+  // 换成 9 点开始：结束跟着到 10 点
+  const at9 = rescheduleDates(task, new Date(2026, 10, 5, 9, 0), false);
+  assert.equal(new Date(at9.dueDate).getHours(), 10);
+  // 改成全天：不再带时长
+  const allDay = rescheduleDates(task, new Date(2026, 10, 5), true);
+  assert.equal(allDay.startDate, allDay.dueDate);
+  // 跨三天的全天任务挪一天，结束也挪一天
+  const span = rescheduleDates({ startDate: "2026-11-02T00:00:00+0800", dueDate: "2026-11-04T00:00:00+0800", isAllDay: true }, new Date(2026, 10, 10));
+  assert.equal(new Date(span.dueDate).getDate(), 12);
+  assert.match(describeDue(task, new Date(2026, 10, 1)).label, /16:00–17:00/);
+});
+
+test("重复规则翻成中文", async () => {
+  const { describeRepeat, repeatOptions, sameRule } = await import("../src/dida/repeat.ts");
+  assert.equal(describeRepeat("RRULE:FREQ=WEEKLY;BYDAY=MO"), "每周一");
+  assert.equal(describeRepeat("RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE"), "每 2 周一、三");
+  assert.equal(describeRepeat("RRULE:FREQ=WEEKLY;INTERVAL=1;BYDAY=MO,TU,WE,TH,FR"), "每个工作日");
+  assert.equal(describeRepeat("RRULE:FREQ=MONTHLY;BYMONTHDAY=5"), "每月 5 日");
+  assert.equal(describeRepeat("ERULE:NAME=CUSTOM;BYDATE=20260325"), "重复");
+  assert.equal(describeRepeat(""), null);
+  const opts = repeatOptions(new Date(2026, 10, 2));
+  assert.equal(opts[2].label, "每周一");
+  assert.ok(sameRule("RRULE:FREQ=WEEKLY;BYDAY=MO", opts[2].rule));
+});

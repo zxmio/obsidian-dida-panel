@@ -1,10 +1,11 @@
-import { ItemView, MarkdownRenderer, Notice, setIcon, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
+import { ItemView, Notice, setIcon, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
 import type DidaPanelPlugin from "../main.ts";
 import type { PanelTab, ProjectViewMode } from "../settings.ts";
-import { CLEAR_DATE, describeDue, formatDidaDate, relativeTime, startOfDay } from "../dida/dates.ts";
-import { firstLinkedPath } from "../dida/deeplink.ts";
+import { describeRepeat } from "../dida/repeat.ts";
+import { CLEAR_DATE, describeDue, formatDidaDate, parseDidaDate, relativeTime, rescheduleDates, startOfDay } from "../dida/dates.ts";
+import { boundNotePath, taskWebUrl } from "../dida/deeplink.ts";
 import { parseQuickAdd } from "../dida/quickAdd.ts";
-import { INBOX_ID, type DidaColumn, type DidaProject, type DidaTask, type TaskInput, type TaskSearchHit } from "../dida/types.ts";
+import { INBOX_ID, PRIORITIES, PRIORITY_LABEL, taskBody, type ChecklistItem, type DidaColumn, type DidaProject, type DidaTask, type TaskInput, type TaskSearchHit } from "../dida/types.ts";
 import { McpAuthError } from "../mcp/client.ts";
 import { isQueued } from "../dispatch/prompt.ts";
 import { targetInfo } from "../dispatch/targets.ts";
@@ -15,7 +16,9 @@ import { ChatDock } from "./chatDock.ts";
 import { QuickChips } from "./quickChips.ts";
 import { openDispatchPicker } from "./dispatchPicker.ts";
 import { openTaskActions } from "./taskActions.ts";
-import { openActionMenu, openPrompt, type ActionMenuSpec } from "./actionMenu.ts";
+import { openDatePicker } from "./datePanel.ts";
+import { renderTaskMarkdown } from "./markdown.ts";
+import { openActionMenu, openPrompt, type ActionItem, type ActionMenuSpec } from "./actionMenu.ts";
 import { ProjectModal, archiveProject } from "./projectModal.ts";
 import type { QuickPopover } from "./quickPopover.ts";
 import type { PromptContext } from "../agent/systemPrompt.ts";
@@ -65,12 +68,7 @@ interface LaneSpec {
 /** 今天视图的看板模式记在 viewModes 的这个键下，和项目 id 不冲突。 */
 const TODAY_MODE_KEY = "__today__";
 
-export function taskWebUrl(task: DidaTask): string {
-  return `https://dida365.com/webapp/#p/${task.projectId}/tasks/${task.id}`;
-}
 
-/** 看板每条泳道默认显示的卡片数，多出的收进「还有 N 条 · 展开」 */
-const LANE_LIMIT = 8;
 
 /** 弹出面板锚在被点的按钮上；拿不到按钮就锚在鼠标处。 */
 function anchorOf(e: MouseEvent): DOMRect {
@@ -112,14 +110,19 @@ export class DidaPanelView extends ItemView {
   private expandedChild: string | null = null;
   /** 刚在这条泳道顶部加过任务：重画后把光标放回去 */
   private laneAddFocus: string | null = null;
-  /** 点过「展开」的泳道，显示全部卡片 */
-  private readonly expandedLanes = new Set<string>();
   private actionPop: QuickPopover | null = null;
   /** 快速添加选的分组，只对选的那个项目有效；id 为 null 是「未分组」 */
   private quickColumn: { key: string; id: string | null } | null = null;
   private dragging: DidaTask | null = null;
   private mainEl: HTMLElement | null = null;
   private dock: ChatDock | null = null;
+  /** 多选模式：点任务是选中而不是展开，底部出批量操作栏；⌘ / Ctrl 点任务也会进入 */
+  private selecting = false;
+  private readonly selected = new Map<string, DidaTask>();
+  /** 这一轮画出来的未完成任务，「全选」用 */
+  private visibleTasks: DidaTask[] = [];
+  /** 顶栏铺满按钮画的是侧栏态还是铺满态；面板被拖到别处时据此重画 */
+  private headerDocked: boolean | null = null;
 
   constructor(leaf: WorkspaceLeaf, private readonly plugin: DidaPanelPlugin) {
     super(leaf);
@@ -171,6 +174,12 @@ export class DidaPanelView extends ItemView {
     this.dock.render();
     this.watchStatusBar();
     this.unsubscribe = this.plugin.store.subscribe(() => this.render());
+    this.registerDomEvent(this.contentEl.doc, "keydown", (e) => {
+      if (e.key === "Escape" && this.selecting && !this.contentEl.doc.querySelector(".modal-container, .dida-pop")) this.exitSelecting();
+    });
+    this.registerEvent(this.app.workspace.on("layout-change", () => {
+      if (this.headerDocked !== null && this.headerDocked !== this.plugin.inSidebar(this)) this.render();
+    }));
     this.render();
     await this.refresh(false);
   }
@@ -368,6 +377,7 @@ export class DidaPanelView extends ItemView {
 
     this.quickChips?.destroy();
     this.quickChips = null;
+    this.visibleTasks = [];
     root.empty();
     root.addClass("dida-panel");
     this.renderHeader(root);
@@ -403,6 +413,7 @@ export class DidaPanelView extends ItemView {
     } else this.renderSearchResults(body);
 
     if (this.loading && body.childElementCount === 0) body.createDiv({ cls: "dida-loading", text: "加载中…" });
+    if (this.selecting) this.renderBatchBar(root);
     body.scrollTop = prevScroll;
     body.scrollLeft = prevScrollLeft;
     this.dock?.refreshContext();
@@ -412,13 +423,21 @@ export class DidaPanelView extends ItemView {
     const header = root.createDiv({ cls: "dida-header" });
     header.createSpan({ cls: "dida-header-title", text: "滴答清单" });
     const synced = this.plugin.store.lastRefreshAt ? `${relativeTime(this.plugin.store.lastRefreshAt)}同步，点击立即同步` : "立即同步";
+    this.iconButton(header, "search", "搜索", () => this.setTab("search"), this.tab === "search" ? "is-active" : "");
     this.iconButton(header, "stethoscope", "任务体检", () => this.plugin.openReview());
     this.iconButton(header, "refresh-cw", synced, () => void this.refresh(true), this.loading ? "is-loading" : "");
     this.iconButton(header, "plus", "新建待办", () => this.openCreate(), "is-accent");
+    const docked = this.plugin.inSidebar(this);
+    this.headerDocked = docked;
+    this.iconButton(header, docked ? "maximize-2" : "minimize-2", docked ? "铺满" : "收回侧栏", () => void this.plugin.toggleFullscreen(this));
     this.iconButton(header, "more-horizontal", "更多", (e) =>
       this.showActions(anchorOf(e), {
         groups: [
-          [{ icon: "folder-plus", label: "新建项目…", run: () => this.openNewProject() }],
+          [
+            { icon: "folder-plus", label: "新建项目…", run: () => this.openNewProject() },
+            { icon: "list-checks", label: this.selecting ? "退出多选" : "多选（批量操作）", run: () => (this.selecting ? this.exitSelecting() : this.enterSelecting()) },
+            { icon: "tags", label: "管理标签…", run: () => this.plugin.openTagManager() }
+          ],
           [
             { icon: "settings", label: "插件设置", run: () => this.plugin.openSettings() },
             { icon: "external-link", label: "在滴答清单网页版打开", run: () => window.open("https://dida365.com/webapp/") }
@@ -439,8 +458,7 @@ export class DidaPanelView extends ItemView {
     const defs: Array<[PanelTab, string, number | undefined]> = [
       ["today", "今天", undefined],
       ["inbox", "收件箱", inboxCount],
-      ["project", "项目", undefined],
-      ["search", "搜索", undefined]
+      ["project", "项目", undefined]
     ];
     for (const [tab, label, count] of defs) {
       const btn = tabs.createEl("button", { cls: "dida-tab", text: label, attr: { type: "button" } });
@@ -452,16 +470,20 @@ export class DidaPanelView extends ItemView {
     tabs.createSpan({ cls: "dida-tab-divider" });
     for (const project of pinned) {
       const { emoji, name } = splitEmoji(project.name);
+      const alias = this.plugin.settings.pinnedNames[project.id];
       const btn = tabs.createEl("button", { cls: "dida-tab is-pinned", attr: { type: "button", title: project.name } });
       if (emoji) btn.createSpan({ cls: "dida-tab-emoji", text: emoji });
-      btn.createSpan({ cls: "dida-tab-label", text: name || project.name });
+      btn.createSpan({ cls: "dida-tab-label", text: alias || name || project.name });
       const count = store.getProject(project.id)?.tasks.length ?? store.overview?.counts.get(store.projectKey(project.id))?.undone;
       if (count) btn.createSpan({ cls: "dida-tab-count", text: String(count) });
       btn.toggleClass("is-active", onPinned && this.projectId === project.id);
       btn.addEventListener("click", () => this.showProject(project.id));
       btn.addEventListener("contextmenu", (e) => {
         e.preventDefault();
-        this.showActions(new DOMRect(e.clientX, e.clientY, 0, 0), this.projectActions(project, false));
+        {
+          const rect = new DOMRect(e.clientX, e.clientY, 0, 0);
+          this.showActions(rect, this.projectActions(project, false, rect));
+        }
       });
     }
     // 页签多了横向滚动，把亮着的那个滚进视野
@@ -482,6 +504,16 @@ export class DidaPanelView extends ItemView {
     settings.pinnedProjects = pinned ? settings.pinnedProjects.filter((id) => id !== project.id) : [...settings.pinnedProjects, project.id];
     await this.plugin.saveSettings();
     new Notice(pinned ? `已取消置顶「${project.name}」` : `已把「${project.name}」置顶到页签栏`);
+    this.render();
+  }
+
+  /** 置顶页签的显示名，只改页签上的字，滴答里的项目名不动；传 null 恢复项目名 */
+  private async setPinnedName(project: DidaProject, alias: string | null): Promise<void> {
+    const names = { ...this.plugin.settings.pinnedNames };
+    if (alias) names[project.id] = alias;
+    else delete names[project.id];
+    this.plugin.settings.pinnedNames = names;
+    await this.plugin.saveSettings();
     this.render();
   }
 
@@ -509,7 +541,10 @@ export class DidaPanelView extends ItemView {
 
     this.iconButton(head, "more-horizontal", "项目更多操作", (e) => {
       const p = project ?? { id: projectId, name: store.projectName(projectId), groupId: null };
-      this.showActions(anchorOf(e), this.projectActions(p as DidaProject, true));
+      {
+        const rect = anchorOf(e);
+        this.showActions(rect, this.projectActions(p as DidaProject, true, rect));
+      }
     });
 
     if (!snap) return;
@@ -819,7 +854,8 @@ export class DidaPanelView extends ItemView {
       const key = p.groupId && store.groupName(p.groupId) ? p.groupId : "__none__";
       byGroup.set(key, [...(byGroup.get(key) ?? []), p]);
     }
-    const groupIds = [...store.groups.map((g) => g.id).filter((id) => byGroup.has(id)), ...(byGroup.has("__none__") ? ["__none__"] : [])];
+    // 空文件夹也列出来，刚建的文件夹才看得到
+    const groupIds = [...store.groups.map((g) => g.id), ...(byGroup.has("__none__") ? ["__none__"] : [])];
 
     for (const gid of groupIds) {
       const items = byGroup.get(gid) ?? [];
@@ -831,19 +867,81 @@ export class DidaPanelView extends ItemView {
       header.toggleClass("is-collapsed", !open);
       setIcon(header.createSpan({ cls: "dida-ov-group-chev" }), "chevron-down");
       header.createSpan({ cls: "dida-ov-group-name", text: gid === "__none__" ? "未分组" : store.groupName(gid) ?? "未分组" });
-      header.createSpan({ cls: "dida-ov-group-meta", text: `${items.length} 个项目 · ${total} 条` });
+      header.createSpan({ cls: "dida-ov-group-meta", text: items.length ? `${items.length} 个项目 · ${total} 条` : "空文件夹" });
       header.addEventListener("click", () => {
         if (open) this.collapsed.add(key);
         else this.collapsed.delete(key);
         this.renderOverviewList(list, projects);
       });
+      if (gid !== "__none__") {
+        const menu = (rect: DOMRect): void => this.showActions(rect, this.folderActions(gid, items.length, rect));
+        const more = this.iconButton(header, "more-horizontal", "文件夹操作", (e) => menu((e.currentTarget as HTMLElement).getBoundingClientRect()), "is-small dida-ov-group-more");
+        more.addEventListener("click", (e) => e.stopPropagation());
+        header.addEventListener("contextmenu", (e) => {
+          e.preventDefault();
+          menu(new DOMRect(e.clientX, e.clientY, 0, 0));
+        });
+      }
       if (open) for (const p of items) this.renderProjectRow(section, p);
     }
 
-    const add = list.createEl("button", { cls: "dida-new-column-btn dida-ov-new", attr: { type: "button" } });
+    const foot = list.createDiv({ cls: "dida-ov-foot" });
+    const add = foot.createEl("button", { cls: "dida-new-column-btn dida-ov-new", attr: { type: "button" } });
     setIcon(add.createSpan(), "plus");
     add.createSpan({ text: "新建项目" });
     add.addEventListener("click", () => this.openNewProject());
+    const addFolder = foot.createEl("button", { cls: "dida-new-column-btn dida-ov-new", attr: { type: "button" } });
+    setIcon(addFolder.createSpan(), "folder-plus");
+    addFolder.createSpan({ text: "新建文件夹" });
+    addFolder.addEventListener("click", () =>
+      openPrompt(this.contentEl.doc, addFolder.getBoundingClientRect(), {
+        title: "新建文件夹",
+        placeholder: "文件夹名称",
+        confirm: "新建",
+        onSubmit: (name) =>
+          void this.plugin.store
+            .createGroup(name)
+            .then(() => new Notice(`已新建文件夹「${name}」`))
+            .catch((error: unknown) => new Notice(`新建文件夹失败：${this.plugin.describeError(error)}`, 6000))
+      })
+    );
+  }
+
+  /** 文件夹操作：在里面新建项目、改名、删除（删除只删文件夹，里面的项目留着、移出文件夹） */
+  private folderActions(groupId: string, projectCount: number, rect: DOMRect): ActionMenuSpec {
+    const store = this.plugin.store;
+    const name = store.groupName(groupId) ?? "文件夹";
+    const fail = (what: string) => (error: unknown) => new Notice(`${what}失败：${this.plugin.describeError(error)}`, 6000);
+    return {
+      head: { title: name, sub: projectCount ? `${projectCount} 个项目` : "空文件夹" },
+      groups: [
+        [{ icon: "plus", label: "在这里新建项目…", run: () => this.openNewProject(groupId) }],
+        [
+          {
+            icon: "pencil",
+            label: "重命名…",
+            run: () =>
+              openPrompt(this.contentEl.doc, rect, {
+                title: "重命名文件夹",
+                placeholder: name,
+                confirm: "改成",
+                value: name,
+                onSubmit: (next) => void store.renameGroup(groupId, next).catch(fail("重命名"))
+              })
+          },
+          {
+            icon: "folder-x",
+            label: projectCount ? "删除文件夹（项目保留）" : "删除文件夹",
+            danger: true,
+            run: () =>
+              void store
+                .deleteGroup(groupId)
+                .then(() => new Notice(projectCount ? `已删除「${name}」，里面 ${projectCount} 个项目移到了未分组` : `已删除「${name}」`))
+                .catch(fail("删除文件夹"))
+          }
+        ]
+      ]
+    };
   }
 
   /** 项目行：名称开头的 emoji 当图标，没有就用项目颜色点；悬停时数字换成「新建 / 更多」。 */
@@ -882,7 +980,10 @@ export class DidaPanelView extends ItemView {
       });
     };
     action("plus", "新建待办到此项目", () => this.plugin.openCreateModal({ projectId: project.id }));
-    action("more-horizontal", "更多", (e) => this.showActions(anchorOf(e), this.projectActions(project, false)));
+    action("more-horizontal", "更多", (e) => {
+      const rect = anchorOf(e);
+      this.showActions(rect, this.projectActions(project, false, rect));
+    });
 
     row.addEventListener("click", () => this.showProject(project.id));
     row.addEventListener("keydown", (e) => {
@@ -893,15 +994,37 @@ export class DidaPanelView extends ItemView {
     });
     row.addEventListener("contextmenu", (e) => {
       e.preventDefault();
-      this.showActions(new DOMRect(e.clientX, e.clientY, 0, 0), this.projectActions(project, false));
+      {
+          const rect = new DOMRect(e.clientX, e.clientY, 0, 0);
+          this.showActions(rect, this.projectActions(project, false, rect));
+        }
     });
+  }
+
+  /** 置顶页签改名：输入新名字；改过的再给一个恢复原名 */
+  private pinnedNameActions(project: DidaProject, rect: DOMRect): ActionItem[] {
+    const alias = this.plugin.settings.pinnedNames[project.id];
+    const { name } = splitEmoji(project.name);
+    const rename = {
+      icon: "text-cursor-input",
+      label: "页签名称…",
+      run: () =>
+        openPrompt(this.contentEl.doc, rect, {
+          title: "页签上显示的名称（滴答里的项目名不变）",
+          placeholder: name || project.name,
+          confirm: "改成",
+          value: alias ?? (name || project.name),
+          onSubmit: (value) => void this.setPinnedName(project, value === (name || project.name) ? null : value)
+        })
+    };
+    return alias ? [rename, { icon: "rotate-ccw", label: `恢复原名「${name || project.name}」`, run: () => void this.setPinnedName(project, null) }] : [rename];
   }
 
   /**
    * 项目操作：总览里的项目行（「更多」和右键）与项目详情头部共用。
    * inside 为 true 时是在项目里打开的：不显示「打开」，多出切换项目、刷新。
    */
-  private projectActions(project: DidaProject, inside: boolean): ActionMenuSpec {
+  private projectActions(project: DidaProject, inside: boolean, rect: DOMRect): ActionMenuSpec {
     const store = this.plugin.store;
     const key = store.projectKey(project.id);
     const count = store.overview?.counts.get(key);
@@ -926,7 +1049,8 @@ export class DidaPanelView extends ItemView {
                   icon: this.plugin.settings.pinnedProjects.includes(project.id) ? "pin-off" : "pin",
                   label: this.plugin.settings.pinnedProjects.includes(project.id) ? "取消置顶" : "置顶到页签栏",
                   run: () => void this.togglePin(project)
-                }
+                },
+                ...(this.plugin.settings.pinnedProjects.includes(project.id) ? this.pinnedNameActions(project, rect) : [])
               ])
         ],
         // 收件箱是滴答内置的，不能改名也不能归档
@@ -1368,23 +1492,10 @@ export class DidaPanelView extends ItemView {
 
       const cards = lane.createDiv({ cls: "dida-lane-cards" });
       cards.createDiv({ cls: "dida-lane-drop" });
-      // 长泳道先显示前 LANE_LIMIT 条，其余收进「还有 N 条 · 展开」
-      const open = this.expandedLanes.has(spec.key);
       // 父任务也在这条泳道时，子任务收进父任务卡片里，不单独占一张卡
       const ids = new Set(spec.tasks.map((t) => t.id));
       const tops = spec.tasks.filter((t) => !(t.parentId && ids.has(t.parentId)));
-      const shown = open ? tops : tops.slice(0, LANE_LIMIT);
-      for (const t of shown) this.renderTask(cards, t, spec.ctx);
-      if (tops.length > LANE_LIMIT) {
-        const more = cards.createDiv({ cls: "dida-ghost" });
-        setIcon(more.createSpan(), open ? "chevron-up" : "plus");
-        more.createSpan({ text: open ? "收起" : `还有 ${tops.length - LANE_LIMIT} 条 · 展开` });
-        more.addEventListener("click", () => {
-          if (open) this.expandedLanes.delete(spec.key);
-          else this.expandedLanes.add(spec.key);
-          this.render();
-        });
-      }
+      for (const t of tops) this.renderTask(cards, t, spec.ctx);
       if (prefill) addInput = this.renderLaneAdd(cards, spec.key, spec.name, prefill);
       else if (!spec.tasks.length) cards.createDiv({ cls: "dida-lane-empty", text: spec.emptyText ?? "暂无待办" });
 
@@ -1450,6 +1561,23 @@ export class DidaPanelView extends ItemView {
     const expanded = ctx.nested ? this.expandedChild === task.id : this.expanded === task.id;
     if (expanded) row.addClass("is-expanded");
     if (ctx.nested) row.addClass("is-nested");
+    if (task.status !== 2) this.visibleTasks.push(task);
+    if (this.selecting) {
+      row.addClass("is-selecting");
+      row.toggleClass("is-selected", this.selected.has(task.id));
+    }
+    // 多选：捕获阶段先拦下点击，免得勾掉、展开或开菜单；父任务卡片里的子任务行只认它自己
+    row.addEventListener(
+      "click",
+      (e) => {
+        if (!this.selecting && !(e.metaKey || e.ctrlKey)) return;
+        if ((e.target as HTMLElement).closest(".dida-task") !== row || task.status === 2) return;
+        e.preventDefault();
+        e.stopPropagation();
+        this.toggleSelected(task);
+      },
+      true
+    );
 
     if (ctx.card && task.status !== 2) {
       row.draggable = true;
@@ -1489,6 +1617,11 @@ export class DidaPanelView extends ItemView {
     if (due.label && !(ctx.hideTodayLabel && due.state === "today" && task.isAllDay !== false)) {
       meta.createSpan({ cls: `dida-due is-${due.state}`, text: due.label });
     }
+    const repeat = describeRepeat(task.repeatFlag);
+    if (repeat) {
+      const r = meta.createSpan({ cls: "dida-repeat", attr: { "aria-label": repeat, title: repeat } });
+      setIcon(r, "repeat");
+    }
     // 优先级看勾选框的圈（高红、中深灰），属性行不再单放「高 / 中」
     // 子任务进度：只数还存在的子任务（删掉的子任务 id 会残留在 childIds 里，见 store.subtaskProgress）
     const { done, total } = this.plugin.store.subtaskProgress(task);
@@ -1505,12 +1638,24 @@ export class DidaPanelView extends ItemView {
         this.render();
       });
     }
+    // 清单型任务的检查项进度，点一下展开看全部检查项
+    const items = task.items ?? [];
+    if (items.length) {
+      const checked = items.filter((i) => i.status === 1).length;
+      const badge = meta.createSpan({ cls: "dida-subcount", attr: { "aria-label": `检查项完成 ${checked} / ${items.length}` } });
+      setIcon(badge.createSpan({ cls: "dida-subcount-icon" }), "list-checks");
+      badge.createSpan({ text: `${checked}/${items.length}` });
+      badge.toggleClass("is-done", checked === items.length);
+      badge.addEventListener("click", (e) => {
+        e.stopPropagation();
+        title.click();
+      });
+    }
     if (ctx.showProject) meta.createSpan({ cls: "dida-task-project", text: this.plugin.store.projectName(task.projectId) });
     if (task.status === 2 && task.completedTime) {
       const done = new Date(task.completedTime);
       if (!Number.isNaN(done.getTime())) meta.createSpan({ text: `${String(done.getHours()).padStart(2, "0")}:${String(done.getMinutes()).padStart(2, "0")} 完成` });
     }
-    const queued = isQueued(task, this.plugin.settings.aiTag);
     for (const tag of task.tags ?? []) {
       if (ctx.columns && this.filterTag === tag) continue;
       if (ctx.hideTag === tag) continue;
@@ -1518,31 +1663,23 @@ export class DidaPanelView extends ItemView {
       if (tag === this.plugin.settings.aiTag) chip.addClass("is-queue");
       else this.plugin.applyTagColor(chip, tag);
     }
-    const linked = firstLinkedPath(task.content);
+    const text = taskBody(task);
+    const linked = boundNotePath(text);
     if (linked) {
       const name = linked.split("/").pop() ?? linked;
       const btn = meta.createEl("button", { cls: "dida-note-btn", attr: { type: "button", "aria-label": `打开关联笔记：${name}`, title: linked } });
       setIcon(btn, "link");
-      if (/^正文：\[/m.test(task.content ?? "")) btn.addClass("is-body");
+      if (/^正文：\[/m.test(text)) btn.addClass("is-body");
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
         void this.app.workspace.openLinkText(linked, "", false);
       });
-    } else if (!ctx.showProject && /^正文：待建/m.test(task.content ?? "")) {
+    } else if (!ctx.showProject && /^正文：待建/m.test(text)) {
       meta.createSpan({ text: "正文待建" });
     }
 
+    // 右上角悬停只留「⋯」；派给 AI、笔记、日期、编辑这几个常用的放在展开后的底部一排
     const actions = row.createDiv({ cls: "dida-task-actions" });
-    if (task.status !== 2) {
-      const target = targetInfo(this.plugin.settings.aiTarget).label;
-      const bot = this.iconButton(actions, "bot", `${queued ? "再派给" : "派给"} ${target}（右键换一个）`, () => void this.plugin.dispatchTask(task), queued ? "is-accent" : "");
-      bot.addEventListener("contextmenu", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        this.openDispatchPicker(task, bot.getBoundingClientRect());
-      });
-    }
-    this.iconButton(actions, "pencil", "编辑", () => this.plugin.openEditModal(task));
     const more = this.iconButton(actions, "more-horizontal", "更多", () => this.openTaskActions(task, ctx, more.getBoundingClientRect()));
     row.addEventListener("contextmenu", (e) => {
       e.preventDefault();
@@ -1620,23 +1757,74 @@ export class DidaPanelView extends ItemView {
 
   private renderDetails(row: HTMLElement, task: DidaTask, ctx: TaskRenderContext): void {
     const details = row.createDiv({ cls: "dida-task-details" });
-    if (task.content?.trim()) {
-      const md = details.createDiv({ cls: "dida-md" });
-      void MarkdownRenderer.render(this.app, task.content, md, "", this);
-    } else if (task.desc?.trim()) {
-      details.createDiv({ cls: "dida-md", text: task.desc });
+    const body = taskBody(task);
+    if (body.trim()) {
+      // 正文里的任务列表勾一下就改正文存回滴答
+      renderTaskMarkdown(this.app, body, details.createDiv(), this, (next) =>
+        void this.plugin.store.updateTask(task, { content: next }).catch((error: unknown) => new Notice(`更新正文失败：${this.plugin.describeError(error)}`))
+      );
     }
+    if (task.items?.length) this.renderChecklist(details, task, task.items);
     // 看板卡片里子任务收进父任务，展开时在这里列出来；列表视图里子任务本来就缩进排在父任务下面
     if (ctx.card && !ctx.nested) this.renderSubtaskList(details, row, task, ctx);
     if (task.status !== 2 && !task.parentId) this.renderSubtaskInput(details, task);
-    // 操作都在「⋯」面板里，这里只放内容和子任务；什么都没有就不留空白
-    if (!details.childElementCount) details.remove();
+    this.renderQuickActions(details, task);
   }
 
-  private setDate(task: DidaTask, d: Date | null, allDay = true): void {
-    const when = d ? formatDidaDate(d, allDay) : CLEAR_DATE;
+  /** 展开后底部一排常用动作：派给 AI、打开 / 创建笔记、设置日期时间、编辑；其余的在「⋯」里 */
+  private renderQuickActions(parent: HTMLElement, task: DidaTask): void {
+    const bar = parent.createDiv({ cls: "dida-task-quick" });
+    if (task.status !== 2) {
+      const queued = isQueued(task, this.plugin.settings.aiTag);
+      const target = targetInfo(this.plugin.settings.aiTarget).label;
+      const bot = this.iconButton(bar, "bot", `${queued ? "再派给" : "派给"} ${target}（右键换一个）`, () => void this.plugin.dispatchTask(task), queued ? "is-accent" : "");
+      bot.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.openDispatchPicker(task, bot.getBoundingClientRect());
+      });
+    }
+    const note = boundNotePath(taskBody(task));
+    if (note) this.iconButton(bar, "file-text", `打开笔记：${note}`, () => void this.app.workspace.openLinkText(note, "", false));
+    else this.iconButton(bar, "file-plus", "创建笔记并绑定到这条待办", () => void this.plugin.createNoteForTask(task).catch((error: unknown) => new Notice(`建笔记失败：${this.plugin.describeError(error)}`, 6000)));
+    if (task.status !== 2) {
+      const date = this.iconButton(bar, "calendar-clock", "设置日期和时间", () => {
+        this.actionPop?.close();
+        const start = parseDidaDate(task.startDate ?? task.dueDate);
+        this.actionPop = openDatePicker(this.contentEl.doc, date.getBoundingClientRect(), { date: start, allDay: task.isAllDay !== false }, (next) =>
+          this.setDate(task, next.date, next.allDay)
+        );
+      });
+    }
+    this.iconButton(bar, "pencil", "编辑", () => this.plugin.openEditModal(task));
+  }
+
+  /** 清单型任务的检查项：勾一下就整组写回滴答（接口只认整组 items） */
+  private renderChecklist(parent: HTMLElement, task: DidaTask, items: ChecklistItem[]): void {
+    const list = parent.createDiv({ cls: "dida-checklist" });
+    for (const item of items) {
+      const line = list.createEl("label", { cls: "dida-checklist-item" });
+      line.toggleClass("is-done", item.status === 1);
+      const box = line.createEl("input", { type: "checkbox", cls: "dida-checklist-box" });
+      box.checked = item.status === 1;
+      box.disabled = task.status === 2;
+      line.createSpan({ cls: "dida-checklist-title", text: item.title || "（无标题）" });
+      box.addEventListener("change", () => {
+        line.toggleClass("is-done", box.checked);
+        const next = items.map((i): ChecklistItem => (i.id === item.id ? { ...i, status: box.checked ? 1 : 0 } : i));
+        void this.plugin.store.updateTask(task, { items: next }).catch((error: unknown) => {
+          box.checked = !box.checked;
+          line.toggleClass("is-done", box.checked);
+          new Notice(`更新检查项失败：${this.plugin.describeError(error)}`);
+        });
+      });
+    }
+  }
+
+  /** allDay 不传就只换日子，原来的时刻和时间段都留着（见 rescheduleDates） */
+  private setDate(task: DidaTask, d: Date | null, allDay?: boolean): void {
     void this.plugin.store
-      .updateTask(task, { startDate: when, dueDate: when, isAllDay: allDay })
+      .updateTask(task, rescheduleDates(task, d, allDay))
       .catch((error: unknown) => new Notice(`改期失败：${this.plugin.describeError(error)}`));
   }
 
@@ -1664,13 +1852,19 @@ export class DidaPanelView extends ItemView {
       task,
       {
         columns,
-        linkedNote: firstLinkedPath(task.content),
+        linkedNote: boundNotePath(taskBody(task)),
         dispatch: (rect) => this.openDispatchPicker(task, rect),
         edit: () => this.plugin.openEditModal(task),
         openNote: (path) => void this.app.workspace.openLinkText(path, "", false),
+        createNote: () => void this.plugin.createNoteForTask(task).catch(fail),
         openWeb: () => window.open(taskWebUrl(task)),
         setDate: (d, allDay) => this.setDate(task, d, allDay),
         setPriority: (p) => void store.updateTask(task, { priority: p }).catch(fail),
+        // 重复要有起始日：没日子的任务设重复时顺便定在今天
+        setRepeat: (rule) =>
+          void store
+            .updateTask(task, { repeatFlag: rule, ...(rule && !task.startDate && !task.dueDate ? rescheduleDates(task, new Date(), true) : {}) })
+            .catch(fail),
         moveToColumn: (col) => void this.moveToColumn(task, col),
         moveToProject: () =>
           new ProjectSuggestModal(
@@ -1708,6 +1902,84 @@ export class DidaPanelView extends ItemView {
     }
   }
 
+  // ---------- 多选与批量 ----------
+
+  private enterSelecting(): void {
+    this.selecting = true;
+    this.expanded = null;
+    this.render();
+  }
+
+  private exitSelecting(): void {
+    this.selecting = false;
+    this.selected.clear();
+    this.render();
+  }
+
+  private toggleSelected(task: DidaTask): void {
+    if (!this.selecting) this.selecting = true;
+    if (this.selected.has(task.id)) this.selected.delete(task.id);
+    else this.selected.set(task.id, task);
+    this.render();
+  }
+
+  /** 底部批量操作栏：已选几条 · 全选 · 完成 / 日期 / 优先级 / 移到 / 删除 · 退出 */
+  private renderBatchBar(root: HTMLElement): void {
+    const store = this.plugin.store;
+    const tasks = [...this.selected.values()];
+    const bar = root.createDiv({ cls: "dida-batch" });
+    bar.createSpan({ cls: "dida-batch-count", text: tasks.length ? `已选 ${tasks.length} 条` : "点任务选择，Esc 退出" });
+    const allOn = this.visibleTasks.length > 0 && this.visibleTasks.every((t) => this.selected.has(t.id));
+    const link = bar.createEl("button", { cls: "dida-batch-link", text: allOn ? "全不选" : "全选", attr: { type: "button" } });
+    link.addEventListener("click", () => {
+      if (allOn) this.selected.clear();
+      else for (const t of this.visibleTasks) this.selected.set(t.id, t);
+      this.render();
+    });
+    const actions = bar.createDiv({ cls: "dida-batch-actions" });
+    const fail = (what: string) => (error: unknown) => new Notice(`${what}失败：${this.plugin.describeError(error)}`, 6000);
+    const finish = (text: string): void => {
+      new Notice(text);
+      this.exitSelecting();
+    };
+    const act = (icon: string, label: string, run: (rect: DOMRect) => void, cls = ""): void => {
+      const b = this.iconButton(actions, icon, label, (e) => run((e.currentTarget as HTMLElement).getBoundingClientRect()), cls);
+      if (!tasks.length) b.setAttribute("disabled", "");
+    };
+    act("check", "完成", () => void Promise.all(tasks.map((t) => store.completeTask(t))).then(() => finish(`已完成 ${tasks.length} 条`)).catch(fail("完成")));
+    act("calendar", "改日期", (rect) => {
+      this.actionPop?.close();
+      this.actionPop = openDatePicker(this.contentEl.doc, rect, { date: null, allDay: true }, (next) => {
+        // 只选了日子就只换日子，各自的时刻和时间段留着；选了时刻就统一改成那个时刻
+        void store
+          .batchUpdate(tasks, (t) => rescheduleDates(t, next.date, next.date && !next.allDay ? false : undefined))
+          .then(() => finish(next.date ? `已改 ${tasks.length} 条的日期` : `已清除 ${tasks.length} 条的日期`))
+          .catch(fail("改日期"));
+      });
+    });
+    act("flag", "优先级", (rect) =>
+      this.showActions(rect, {
+        groups: [
+          [...PRIORITIES].reverse().map((p) => ({
+            icon: "flag",
+            label: p ? `${PRIORITY_LABEL[p]}优先级` : "无优先级",
+            run: () => void store.batchUpdate(tasks, () => ({ priority: p })).then(() => finish(`已改 ${tasks.length} 条的优先级`)).catch(fail("改优先级"))
+          }))
+        ]
+      })
+    );
+    act("folder-input", "移到项目", () =>
+      new ProjectSuggestModal(this.app, store, (p) =>
+        void Promise.all(tasks.filter((t) => store.projectKey(t.projectId) !== store.projectKey(p.id)).map((t) => store.moveTask(t, p.id)))
+          .then(() => finish(`已移到「${p.name}」`))
+          .catch(fail("移动"))
+      ).open()
+    );
+    act("trash-2", "删除", () => void Promise.all(tasks.map((t) => store.deleteTask(t))).then(() => finish(`已删除 ${tasks.length} 条`)).catch(fail("删除")), "is-danger");
+    const close = bar.createEl("button", { cls: "dida-batch-link", text: "退出", attr: { type: "button" } });
+    close.addEventListener("click", () => this.exitSelecting());
+  }
+
   private async complete(task: DidaTask): Promise<void> {
     try {
       await this.plugin.store.completeTask(task);
@@ -1717,11 +1989,9 @@ export class DidaPanelView extends ItemView {
   }
 
   private async remove(task: DidaTask): Promise<void> {
-    const ok = await ConfirmModal.ask(this.app, "删除待办", `「${task.title}」会从滴答清单里彻底删除，不可恢复。`, "删除", true);
-    if (!ok) return;
     try {
       await this.plugin.store.deleteTask(task);
-      new Notice("已删除");
+      new Notice(`已删除「${task.title}」`);
     } catch (error) {
       new Notice(`删除失败：${this.plugin.describeError(error)}`, 6000);
     }

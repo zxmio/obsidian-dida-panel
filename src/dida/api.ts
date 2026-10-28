@@ -42,7 +42,8 @@ export class DidaApi {
     if (patch.name !== undefined) args.name = patch.name;
     if (patch.color !== undefined) args.color = patch.color ?? "";
     if (patch.viewMode !== undefined) args.view_mode = patch.viewMode;
-    if (patch.groupId) args.group_id = patch.groupId;
+    // 滴答约定 group_id 传 NONE 是移出文件夹（2026-10-28 用真实数据验证过）
+    if (patch.groupId !== undefined) args.group_id = patch.groupId ?? "NONE";
     if (patch.closed !== undefined) args.closed = patch.closed;
     const obj = unwrapResult(await this.client.callTool("update_project", args));
     return isRecord(obj) && str(obj.id) ? normalizeProject(obj) : null;
@@ -51,6 +52,21 @@ export class DidaApi {
   async listProjectGroups(): Promise<DidaProjectGroup[]> {
     const raw = await this.client.callTool("list_project_groups", {});
     return asArray(raw).map(normalizeGroup).filter((g) => g.id);
+  }
+
+  async createProjectGroup(name: string): Promise<DidaProjectGroup> {
+    const obj = unwrapResult(await this.client.callTool("create_project_group", { project_group: { name } }));
+    if (!isRecord(obj) || !str(obj.id)) throw new Error("创建成功但接口没有返回文件夹");
+    return normalizeGroup(obj);
+  }
+
+  async renameProjectGroup(groupId: string, name: string): Promise<void> {
+    await this.client.callTool("update_project_group", { project_group_id: groupId, project_group: { name } });
+  }
+
+  /** 删除文件夹：里面的项目不会删，变成不在文件夹里（2026-10-28 验证过） */
+  async deleteProjectGroup(groupId: string): Promise<void> {
+    await this.client.callTool("delete_project_group", { project_group_id: groupId });
   }
 
   async getProjectWithTasks(projectId: string): Promise<ProjectBundle> {
@@ -148,6 +164,16 @@ export class DidaApi {
     return asArray(raw).map(normalizeTag).filter((t) => t.name);
   }
 
+  /** 改名会同步改掉所有任务上的这个标签 */
+  async renameTag(name: string, newName: string): Promise<void> {
+    await this.client.callTool("rename_tag", { name, new_name: newName });
+  }
+
+  /** 删除标签并从所有任务上摘掉 */
+  async deleteTag(name: string): Promise<void> {
+    await this.client.callTool("delete_tag", { name });
+  }
+
   async searchTasks(query: string): Promise<TaskSearchHit[]> {
     const raw = await this.client.callTool("search_task", { query });
     const list = asArray(isRecord(raw) && Array.isArray(raw.tasks) ? raw.tasks : raw);
@@ -179,6 +205,11 @@ export class DidaApi {
     };
     if (task.etag) payload.etag = task.etag;
     if (patch.status !== undefined) payload.status = patch.status;
+    // 清单型任务的正文在 desc，写 content 滴答里看不到
+    if (task.kind === "CHECKLIST" && "content" in payload) {
+      payload.desc = payload.content;
+      delete payload.content;
+    }
     const raw = await this.client.callTool("update_task", {
       client_timezone: this.tz,
       task_id: task.id,
@@ -186,6 +217,21 @@ export class DidaApi {
     });
     const obj = unwrapResult(raw);
     return isRecord(obj) && str(obj.id) ? normalizeTask(obj) : { ...task, ...patch, etag: null };
+  }
+
+  /** 一次改多条，每条只发要改的字段；有一条失败就整体报错，并说明失败了几条 */
+  async batchUpdateTasks(updates: { task: DidaTask; patch: Partial<TaskInput> }[]): Promise<void> {
+    const tasks = updates.map(({ task, patch }) => {
+      const payload: Record<string, unknown> = { id: task.id, projectId: task.projectId, ...this.toPayload(patch) };
+      if (task.kind === "CHECKLIST" && "content" in payload) {
+        payload.desc = payload.content;
+        delete payload.content;
+      }
+      return payload;
+    });
+    const obj = unwrapResult(await this.client.callTool("batch_update_tasks", { tasks }));
+    const failed = isRecord(obj) && isRecord(obj.id2error) ? Object.keys(obj.id2error).length : 0;
+    if (failed) throw new Error(`${updates.length} 条里有 ${failed} 条没改成功`);
   }
 
   async completeTask(task: DidaTask): Promise<void> {
@@ -215,6 +261,8 @@ export class DidaApi {
     if (input.isAllDay !== undefined) payload.isAllDay = input.isAllDay;
     // 滴答约定 parentId 传空字符串是脱离父任务（2026-10-28 用真实数据验证过挂上和脱离）
     if (input.parentId !== undefined) payload.parentId = input.parentId ?? "";
+    if (input.repeatFlag !== undefined) payload.repeatFlag = input.repeatFlag;
+    if (input.items !== undefined) payload.items = input.items.map((i) => ({ ...(i.id ? { id: i.id } : {}), title: i.title, status: i.status, sortOrder: i.sortOrder }));
     if (input.startDate || input.dueDate) payload.timeZone = input.timeZone ?? this.tz;
     return payload;
   }
