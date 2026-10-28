@@ -21,7 +21,7 @@ export class ConfirmModal extends Modal {
 
   onOpen(): void {
     this.titleEl.setText(this.title);
-    this.contentEl.createEl("p", { text: this.message });
+    this.contentEl.createEl("p", { cls: "dida-confirm-text", text: this.message });
     const row = this.contentEl.createDiv({ cls: "modal-button-container" });
     row.createEl("button", { text: "取消" }).addEventListener("click", () => this.close());
     const ok = row.createEl("button", { text: this.confirmText, cls: this.danger ? "mod-warning" : "mod-cta" });

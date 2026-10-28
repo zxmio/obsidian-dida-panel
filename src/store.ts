@@ -1,6 +1,6 @@
 import type { DidaApi } from "./dida/api.ts";
 import { addDays, describeDue, startOfDay } from "./dida/dates.ts";
-import { INBOX_ID, isInboxId, type DidaColumn, type DidaProject, type DidaProjectGroup, type DidaTag, type DidaTask, type TaskInput } from "./dida/types.ts";
+import { INBOX_ID, isInboxId, type DidaColumn, type DidaProject, type DidaProjectGroup, type DidaTag, type DidaTask, type ProjectInput, type TaskInput } from "./dida/types.ts";
 
 export interface ProjectSnapshot {
   project: DidaProject;
@@ -47,6 +47,22 @@ const INBOX_PROJECT: DidaProject = {
   kind: "TASK"
 };
 
+/** 新分组的排序值：插在 before 左边、after 右边，或者排到最后；没有分组时交给滴答。 */
+export function columnSortOrder(sorted: DidaColumn[], at: { before?: string; after?: string }): number | undefined {
+  if (!sorted.length) return undefined;
+  const STEP = 2 ** 40;
+  const i = sorted.findIndex((c) => c.id === (at.before ?? at.after));
+  if (i < 0) return Math.round(sorted[sorted.length - 1].sortOrder) + STEP;
+  const [left, right] = at.before ? [sorted[i - 1], sorted[i]] : [sorted[i], sorted[i + 1]];
+  if (!left) return Math.round(right.sortOrder) - STEP;
+  if (!right) return Math.round(left.sortOrder) + STEP;
+  return Math.round((left.sortOrder + right.sortOrder) / 2);
+}
+
+function stripUndefined<T extends object>(obj: T): Partial<T> {
+  return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) as Partial<T>;
+}
+
 /** 新建任务在本地补位的最长时间；滴答通常几秒内就能读到 */
 const PENDING_TTL = 2 * 60_000;
 
@@ -72,7 +88,13 @@ export class DidaStore {
   /** 刚建的任务：滴答的读接口会滞后几秒，重新拉取时没返回的先补回去，见到了就移除。 */
   private readonly pendingCreated = new Map<string, { task: DidaTask; at: number }>();
 
-  constructor(private readonly api: DidaApi, private readonly options: StoreOptions) {}
+  private readonly api: DidaApi;
+  private readonly options: StoreOptions;
+
+  constructor(api: DidaApi, options: StoreOptions) {
+    this.api = api;
+    this.options = options;
+  }
 
   subscribe(fn: () => void): () => void {
     this.listeners.add(fn);
@@ -254,6 +276,20 @@ export class DidaStore {
     if (this.overview) this.overview = { ...this.overview, tasks: swap(this.overview.tasks) };
   }
 
+  /** 某条任务未完成的子任务，从各处缓存（含刚建还没读到的）里收集、去重。 */
+  childrenOf(taskId: string): DidaTask[] {
+    const seen = new Map<string, DidaTask>();
+    const pools = [
+      ...Array.from(this.projectCache.values()).map((s) => s.tasks),
+      this.today?.today ?? [],
+      this.today?.overdue ?? [],
+      this.overview?.tasks ?? [],
+      Array.from(this.pendingCreated.values()).map((e) => e.task)
+    ];
+    for (const list of pools) for (const t of list) if (t.parentId === taskId && t.status !== 2 && !seen.has(t.id)) seen.set(t.id, t);
+    return [...seen.values()].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+  }
+
   /** 从所有缓存里按 id 找任务标题（给确认框用）。 */
   taskTitle(taskId: string): string | null {
     for (const snap of this.projectCache.values()) {
@@ -338,6 +374,79 @@ export class DidaStore {
       if (hit) return hit.projectId;
     }
     return null;
+  }
+
+  /** 新建项目：先插进本地列表（排在同文件夹最后），再从滴答拉一次项目列表。 */
+  async createProject(input: ProjectInput & { name: string }): Promise<DidaProject> {
+    const project = await this.api.createProject(input);
+    if (!this.projects.some((p) => p.id === project.id)) this.projects = [...this.projects, project];
+    this.emit();
+    setTimeout(() => void this.loadProjects(true).catch(() => null), 4000);
+    return project;
+  }
+
+  /** 改项目（名称、颜色、视图、文件夹，或 closed=true 归档）。归档的项目立刻从列表里拿掉。 */
+  async updateProject(projectId: string, patch: ProjectInput): Promise<void> {
+    const updated = await this.api.updateProject(projectId, patch);
+    if (patch.closed) {
+      this.projects = this.projects.filter((p) => p.id !== projectId);
+      this.projectCache.delete(this.projectKey(projectId));
+      this.overview = null;
+    } else {
+      this.projects = this.projects.map((p) => (p.id === projectId ? { ...p, ...stripUndefined(patch), ...(updated ?? {}), id: p.id } : p));
+      const snap = this.projectCache.get(this.projectKey(projectId));
+      if (snap) snap.project = this.projects.find((p) => p.id === projectId) ?? snap.project;
+    }
+    this.emit();
+    setTimeout(() => void this.loadProjects(true).catch(() => null), 4000);
+  }
+
+  /**
+   * 新建分组。不给位置就排在最后；给了 before / after 就插在那个分组的左边 / 右边（取两侧排序值的中点）。
+   * 先插进本地缓存，几秒后再从滴答对一次账（读接口会滞后）。
+   */
+  async createColumn(projectId: string, name: string, at: { before?: string; after?: string } = {}): Promise<DidaColumn> {
+    const key = this.projectKey(projectId);
+    const target = key === INBOX_ID ? (this.realInboxId() ?? key) : key;
+    const columns = [...(this.projectCache.get(key)?.columns ?? [])].sort((a, b) => a.sortOrder - b.sortOrder);
+    const column = await this.api.createColumn(target, name, columnSortOrder(columns, at));
+    const snap = this.projectCache.get(key);
+    if (snap && !snap.columns.some((c) => c.id === column.id)) snap.columns = [...snap.columns, column].sort((a, b) => a.sortOrder - b.sortOrder);
+    this.emit();
+    setTimeout(() => void this.loadProject(key, true).catch(() => null), 4000);
+    return column;
+  }
+
+  async renameColumn(projectId: string, column: DidaColumn, name: string): Promise<void> {
+    const key = this.projectKey(projectId);
+    await this.api.updateColumn(this.columnTarget(key), column.id, { name });
+    const snap = this.projectCache.get(key);
+    if (snap) snap.columns = snap.columns.map((c) => (c.id === column.id ? { ...c, name } : c));
+    this.emit();
+  }
+
+  /** 分组左移 / 右移一位：和相邻分组交换排序值。 */
+  async moveColumn(projectId: string, column: DidaColumn, step: -1 | 1): Promise<void> {
+    const key = this.projectKey(projectId);
+    const snap = this.projectCache.get(key);
+    if (!snap) return;
+    const columns = [...snap.columns].sort((a, b) => a.sortOrder - b.sortOrder);
+    const i = columns.findIndex((c) => c.id === column.id);
+    const other = columns[i + step];
+    if (i < 0 || !other) return;
+    const target = this.columnTarget(key);
+    await Promise.all([
+      this.api.updateColumn(target, column.id, { sortOrder: other.sortOrder }),
+      this.api.updateColumn(target, other.id, { sortOrder: column.sortOrder })
+    ]);
+    snap.columns = snap.columns
+      .map((c) => (c.id === column.id ? { ...c, sortOrder: other.sortOrder } : c.id === other.id ? { ...c, sortOrder: column.sortOrder } : c))
+      .sort((a, b) => a.sortOrder - b.sortOrder);
+    this.emit();
+  }
+
+  private columnTarget(key: string): string {
+    return key === INBOX_ID ? (this.realInboxId() ?? key) : key;
   }
 
   async moveTask(task: DidaTask, toProjectId: string): Promise<void> {

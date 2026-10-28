@@ -25,6 +25,8 @@ export interface QuickPopoverOptions {
   cls: string;
   /** 有值时顶部放一个搜索框，焦点落在搜索框里 */
   search?: string;
+  /** 搜索框的初始内容（用作名称输入时填入原名） */
+  initialQuery?: string;
   render: (pop: QuickPopover, body: HTMLElement, query: string) => void;
   /** 面板里按下的字符键，返回 true 表示已处理（如优先级的 1 2 3 0） */
   onKey?: (key: string) => boolean;
@@ -64,13 +66,17 @@ export class QuickPopover {
       setIcon(head.createSpan({ cls: "dida-pop-search-icon" }), "search");
       this.searchEl = head.createEl("input", { type: "text", attr: { placeholder: opts.search, spellcheck: "false" } });
       this.searchEl.addEventListener("input", () => this.refresh(true));
+      if (opts.initialQuery) this.searchEl.value = opts.initialQuery;
     }
     this.body = this.el.createDiv({ cls: "dida-pop-body" });
     this.el.addEventListener("keydown", (e) => this.handleKey(e));
     this.refresh(true);
     doc.addEventListener("mousedown", this.onOutside, true);
     doc.win.addEventListener("resize", this.onResize);
-    window.setTimeout(() => (this.searchEl ?? this.el).focus(), 0);
+    window.setTimeout(() => {
+      (this.searchEl ?? this.el).focus();
+      this.searchEl?.select();
+    }, 0);
   }
 
   get query(): string {

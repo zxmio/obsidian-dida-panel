@@ -11,6 +11,15 @@ export interface DidaProject {
   kind: string;
 }
 
+/** 新建 / 修改项目时可改的字段。滴答的 MCP 没有删除项目，只能 closed=true 归档。 */
+export interface ProjectInput {
+  name?: string;
+  color?: string | null;
+  viewMode?: "list" | "kanban";
+  groupId?: string | null;
+  closed?: boolean;
+}
+
 export interface DidaProjectGroup {
   id: string;
   name: string;
@@ -76,6 +85,8 @@ export interface TaskInput {
   dueDate?: string | null;
   isAllDay?: boolean;
   timeZone?: string;
+  /** 建成某条任务的子任务 */
+  parentId?: string | null;
 }
 
 export const PRIORITY_LABEL: Record<Priority, string> = { 0: "无", 1: "低", 3: "中", 5: "高" };

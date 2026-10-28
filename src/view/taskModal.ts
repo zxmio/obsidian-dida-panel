@@ -1,9 +1,10 @@
-import { Menu, Modal, Notice, setIcon } from "obsidian";
+import { Modal, Notice, setIcon } from "obsidian";
 import type DidaPanelPlugin from "../main.ts";
 import { CLEAR_DATE, addDays, formatDidaDate, parseDidaDate, startOfDay, toDateInputValue, toTimeInputValue } from "../dida/dates.ts";
 import { appendNoteLink } from "../dida/deeplink.ts";
 import { INBOX_ID, PRIORITIES, PRIORITY_LABEL, type DidaColumn, type DidaTask, type Priority, type TaskInput } from "../dida/types.ts";
 import { ProjectSuggestModal } from "./projectSuggest.ts";
+import { openActionMenu, type ActionMenuSpec } from "./actionMenu.ts";
 
 export interface TaskModalOptions {
   task?: DidaTask;
@@ -226,25 +227,25 @@ export class TaskModal extends Modal {
 
     const dateLabel = this.dateLabel();
     const date = this.chip(host, dateLabel ?? "日期", { set: !!dateLabel, icon: "chevron-down", label: "日期" });
-    date.addEventListener("click", (e) => this.dateMenu().showAtMouseEvent(e));
+    date.addEventListener("click", () => openActionMenu(this.modalEl.doc, date.getBoundingClientRect(), this.dateActions()));
 
     const prio = this.state.priority;
     const prioChip = this.chip(host, prio ? `${PRIORITY_LABEL[prio]}优先级` : "优先级", { set: prio > 0, icon: "chevron-down", label: "优先级" });
-    prioChip.addEventListener("click", (e) => {
-      const menu = new Menu();
-      for (const p of PRIORITIES) {
-        menu.addItem((i) =>
-          i
-            .setTitle(PRIORITY_LABEL[p])
-            .setChecked(this.state.priority === p)
-            .onClick(() => {
+    prioChip.addEventListener("click", () =>
+      openActionMenu(this.modalEl.doc, prioChip.getBoundingClientRect(), {
+        groups: [
+          [...PRIORITIES].reverse().map((p) => ({
+            icon: "flag",
+            label: p ? `${PRIORITY_LABEL[p]}优先级` : "无优先级",
+            checked: this.state.priority === p,
+            run: () => {
               this.state.priority = p;
               this.renderChips();
-            })
-        );
-      }
-      menu.showAtMouseEvent(e);
-    });
+            }
+          }))
+        ]
+      })
+    );
 
     for (const tag of this.state.tags) {
       const chip = this.chip(host, this.plugin.tagLabel(tag), { set: true, icon: "x", label: `移除标签 ${tag}` });
@@ -284,8 +285,7 @@ export class TaskModal extends Modal {
     }
   }
 
-  private dateMenu(): Menu {
-    const menu = new Menu();
+  private dateActions(): ActionMenuSpec {
     const today = startOfDay(new Date());
     const pick = (d: Date | null): void => {
       this.state.date = d ? toDateInputValue(d) : "";
@@ -294,22 +294,26 @@ export class TaskModal extends Modal {
       this.renderChips();
       this.renderDateRow();
     };
-    menu.addItem((i) => i.setTitle("今天").onClick(() => pick(today)));
-    menu.addItem((i) => i.setTitle("明天").onClick(() => pick(addDays(today, 1))));
-    menu.addItem((i) => i.setTitle("下周一").onClick(() => pick(addDays(today, ((8 - today.getDay()) % 7) || 7))));
-    menu.addItem((i) =>
-      i.setTitle("自定义日期和时间…").onClick(() => {
-        this.customDate = true;
-        if (!this.state.date) this.state.date = toDateInputValue(today);
-        this.renderChips();
-        this.renderDateRow();
-      })
-    );
-    if (this.state.date) {
-      menu.addSeparator();
-      menu.addItem((i) => i.setTitle("清除日期").onClick(() => pick(null)));
-    }
-    return menu;
+    return {
+      groups: [
+        [
+          { icon: "sun", label: "今天", run: () => pick(today) },
+          { icon: "sunrise", label: "明天", run: () => pick(addDays(today, 1)) },
+          { icon: "calendar-days", label: "下周一", run: () => pick(addDays(today, ((8 - today.getDay()) % 7) || 7)) },
+          {
+            icon: "calendar-clock",
+            label: "自定义日期和时间…",
+            run: () => {
+              this.customDate = true;
+              if (!this.state.date) this.state.date = toDateInputValue(today);
+              this.renderChips();
+              this.renderDateRow();
+            }
+          }
+        ],
+        this.state.date ? [{ icon: "calendar-x", label: "清除日期", run: () => pick(null) }] : []
+      ]
+    };
   }
 
   private renderDateRow(): void {

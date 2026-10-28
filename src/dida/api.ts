@@ -2,7 +2,7 @@ import { isGatewayError, type McpClient } from "../mcp/client.ts";
 import { isRecord } from "../mcp/protocol.ts";
 import { addDays, formatDidaDate, localTimeZone, startOfDay } from "./dates.ts";
 import { asArray, normalizeColumn, normalizeGroup, normalizeProject, normalizeSearchHit, normalizeTag, normalizeTask, str, unwrapResult } from "./normalize.ts";
-import type { DidaColumn, DidaProject, DidaProjectGroup, DidaTag, DidaTask, TaskInput, TaskSearchHit } from "./types.ts";
+import type { DidaColumn, DidaProject, DidaProjectGroup, DidaTag, DidaTask, ProjectInput, TaskInput, TaskSearchHit } from "./types.ts";
 
 export interface ProjectBundle {
   project: DidaProject;
@@ -27,6 +27,27 @@ export class DidaApi {
     return asArray(raw).map(normalizeProject);
   }
 
+  async createProject(input: ProjectInput & { name: string }): Promise<DidaProject> {
+    const args: Record<string, unknown> = { name: input.name, view_mode: input.viewMode ?? "list" };
+    if (input.color) args.color = input.color;
+    if (input.groupId) args.group_id = input.groupId;
+    const obj = unwrapResult(await this.client.callTool("create_project", args));
+    if (!isRecord(obj) || !str(obj.id)) throw new Error("创建成功但接口没有返回项目");
+    return normalizeProject(obj);
+  }
+
+  /** 只发有值的字段；颜色传空字符串表示去掉颜色。 */
+  async updateProject(projectId: string, patch: ProjectInput): Promise<DidaProject | null> {
+    const args: Record<string, unknown> = { project_id: projectId };
+    if (patch.name !== undefined) args.name = patch.name;
+    if (patch.color !== undefined) args.color = patch.color ?? "";
+    if (patch.viewMode !== undefined) args.view_mode = patch.viewMode;
+    if (patch.groupId) args.group_id = patch.groupId;
+    if (patch.closed !== undefined) args.closed = patch.closed;
+    const obj = unwrapResult(await this.client.callTool("update_project", args));
+    return isRecord(obj) && str(obj.id) ? normalizeProject(obj) : null;
+  }
+
   async listProjectGroups(): Promise<DidaProjectGroup[]> {
     const raw = await this.client.callTool("list_project_groups", {});
     return asArray(raw).map(normalizeGroup).filter((g) => g.id);
@@ -41,6 +62,23 @@ export class DidaApi {
       tasks: asArray(obj.tasks).map(normalizeTask),
       columns: asArray(obj.columns).map(normalizeColumn).sort((a, b) => a.sortOrder - b.sortOrder)
     };
+  }
+
+  /** 新建分组（看板的列 / 列表的分组）。滴答的 MCP 只有新建和修改，没有删除分组的工具。 */
+  async createColumn(projectId: string, name: string, sortOrder?: number): Promise<DidaColumn> {
+    const column: Record<string, unknown> = { name, projectId };
+    if (sortOrder !== undefined) column.sortOrder = sortOrder;
+    const raw = await this.client.callTool("create_column", { project_id: projectId, column });
+    const obj = unwrapResult(raw);
+    if (!isRecord(obj) || !str(obj.id)) throw new Error("创建成功但接口没有返回分组");
+    return normalizeColumn(obj);
+  }
+
+  async updateColumn(projectId: string, columnId: string, patch: { name?: string; sortOrder?: number }): Promise<void> {
+    const column: Record<string, unknown> = { id: columnId, projectId };
+    if (patch.name !== undefined) column.name = patch.name;
+    if (patch.sortOrder !== undefined) column.sortOrder = Math.round(patch.sortOrder);
+    await this.client.callTool("update_column", { project_id: projectId, column_id: columnId, column });
   }
 
   async listColumns(projectId: string): Promise<DidaColumn[]> {
@@ -175,6 +213,8 @@ export class DidaApi {
     if (input.startDate !== undefined) payload.startDate = input.startDate;
     if (input.dueDate !== undefined) payload.dueDate = input.dueDate;
     if (input.isAllDay !== undefined) payload.isAllDay = input.isAllDay;
+    // 滴答约定 parentId 传空字符串是脱离父任务（2026-10-28 用真实数据验证过挂上和脱离）
+    if (input.parentId !== undefined) payload.parentId = input.parentId ?? "";
     if (input.startDate || input.dueDate) payload.timeZone = input.timeZone ?? this.tz;
     return payload;
   }
