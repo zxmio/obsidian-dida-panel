@@ -6,7 +6,7 @@
  *   Codex：      codex://threads/new?prompt=指令&path=目录（ChatGPT 桌面 App 注册）
  * 参数名对照各 App 安装包里的链接处理代码（Claude 3.6556、ChatGPT 26.1021）。
  */
-import { CLAUDE_LOGO, OPENAI_LOGO, type LogoSvg } from "./logos.ts";
+import { CLAUDE_LOGO, MAKERPILOT_LOGO, OPENAI_LOGO, type LogoSvg } from "./logos.ts";
 
 export type DispatchTarget = "makerpilot" | "claude-code" | "claude-chat" | "codex";
 
@@ -15,14 +15,14 @@ export interface DispatchTargetInfo {
   label: string;
   /** Obsidian 图标名，用在原生菜单里 */
   icon: string;
-  /** 品牌 logo，用在派送面板里；没有就用 icon */
-  logo: LogoSvg | null;
+  /** 品牌 logo，用在派送面板里 */
+  logo: LogoSvg;
   /** macOS 上用来判断装没装的 App 名 */
   app: string | null;
 }
 
 export const DISPATCH_TARGETS: DispatchTargetInfo[] = [
-  { id: "makerpilot", label: "MakerPilot", icon: "bot", logo: null, app: null },
+  { id: "makerpilot", label: "MakerPilot", icon: "bot", logo: MAKERPILOT_LOGO, app: null },
   { id: "claude-code", label: "Claude Code", icon: "terminal", logo: CLAUDE_LOGO, app: "Claude.app" },
   { id: "claude-chat", label: "Claude 对话", icon: "message-circle", logo: CLAUDE_LOGO, app: "Claude.app" },
   { id: "codex", label: "Codex", icon: "code", logo: OPENAI_LOGO, app: "ChatGPT.app" }

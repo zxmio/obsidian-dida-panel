@@ -1604,6 +1604,125 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* 任务「更多」操作面板 */
+.dida-pop.is-task-actions {
+  width: 288px;
+}
+.dida-ta-quick {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 4px;
+  padding: 6px;
+  border-bottom: 1px solid var(--dida-line);
+}
+.dida-pop button.dida-ta-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 52px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  box-shadow: none;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.dida-pop button.dida-ta-tile:hover {
+  background: var(--dida-hover);
+  color: var(--text-normal);
+}
+.dida-ta-tile-icon {
+  display: inline-flex;
+}
+.dida-ta-tile-icon svg {
+  width: 17px;
+  height: 17px;
+}
+.dida-pop button.dida-ta-tile.is-accent {
+  color: var(--dida-accent-strong);
+}
+.dida-pop button.dida-ta-tile.is-accent:hover {
+  background: var(--dida-accent-soft);
+}
+.dida-ta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px 0;
+}
+.dida-ta-row-label {
+  flex: none;
+  width: 40px;
+  font-size: 12px;
+  white-space: nowrap;
+  color: var(--text-faint);
+}
+.dida-ta-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+.dida-pop button.dida-ta-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--dida-hover);
+  box-shadow: none;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.dida-pop button.dida-ta-chip:hover {
+  color: var(--text-normal);
+  background: rgba(55, 53, 47, 0.1);
+}
+.theme-dark .dida-pop button.dida-ta-chip:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.dida-pop button.dida-ta-chip.is-active {
+  background: var(--dida-accent-soft);
+  color: var(--dida-accent-strong);
+  font-weight: 500;
+}
+.dida-ta-chip-icon {
+  display: inline-flex;
+}
+.dida-ta-chip-icon svg {
+  width: 12px;
+  height: 12px;
+}
+.dida-ta-chip.is-prio-5 .dida-ta-chip-icon {
+  color: rgb(212, 76, 71);
+}
+.dida-ta-chip.is-prio-3 .dida-ta-chip-icon {
+  color: rgb(217, 115, 13);
+}
+.dida-ta-chip.is-prio-1 .dida-ta-chip-icon {
+  color: rgb(51, 126, 169);
+}
+.dida-ta-chip.is-prio-0 .dida-ta-chip-icon {
+  color: var(--text-faint);
+}
+/* 有日期 / 优先级两行时，下面的列表和它们之间留一条分隔线 */
+.dida-ta-row + .dida-pop-section {
+  margin-top: 6px;
+  border-top: 1px solid var(--dida-line);
+}
+.dida-pop-item.is-danger,
+.dida-pop-item.is-danger .dida-pop-icon {
+  color: var(--text-error);
+}
+
 /* 日历：周一开头，固定 6 行 */
 .dida-cal-head {
   display: flex;

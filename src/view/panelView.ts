@@ -4,7 +4,7 @@ import type { PanelTab, ProjectViewMode } from "../settings.ts";
 import { CLEAR_DATE, addDays, describeDue, formatDidaDate, relativeTime, startOfDay } from "../dida/dates.ts";
 import { firstLinkedPath } from "../dida/deeplink.ts";
 import { parseQuickAdd } from "../dida/quickAdd.ts";
-import { INBOX_ID, PRIORITIES, PRIORITY_LABEL, type DidaColumn, type DidaProject, type DidaTask, type TaskInput, type TaskSearchHit } from "../dida/types.ts";
+import { INBOX_ID, PRIORITY_LABEL, type DidaColumn, type DidaProject, type DidaTask, type TaskInput, type TaskSearchHit } from "../dida/types.ts";
 import { McpAuthError } from "../mcp/client.ts";
 import { isQueued } from "../dispatch/prompt.ts";
 import { targetInfo } from "../dispatch/targets.ts";
@@ -14,6 +14,7 @@ import { ProjectSuggestModal } from "./projectSuggest.ts";
 import { ChatDock } from "./chatDock.ts";
 import { QuickChips } from "./quickChips.ts";
 import { openDispatchPicker } from "./dispatchPicker.ts";
+import { openTaskActions } from "./taskActions.ts";
 import type { QuickPopover } from "./quickPopover.ts";
 import type { PromptContext } from "../agent/systemPrompt.ts";
 
@@ -1229,56 +1230,40 @@ export class DidaPanelView extends ItemView {
     this.dispatchPicker = openDispatchPicker(this.plugin, task, this.contentEl.doc, rect);
   }
 
+  /** 任务「更多」：自绘操作面板，同一时间只开一个（和派送面板共用一个位置）。 */
   private taskMenu(task: DidaTask, e: MouseEvent, ctx: TaskRenderContext): void {
-    const menu = new Menu();
-    const linked = firstLinkedPath(task.content);
-    if (task.status !== 2) {
-      const queued = isQueued(task, this.plugin.settings.aiTag);
-      const anchor = e.currentTarget instanceof HTMLElement ? e.currentTarget.getBoundingClientRect() : new DOMRect(e.clientX, e.clientY, 0, 0);
-      menu.addItem((i) => i.setTitle("派给 AI…").setIcon("bot").onClick(() => this.openDispatchPicker(task, anchor)));
-      menu.addSeparator();
-    }
-    if (linked) menu.addItem((i) => i.setTitle("打开关联笔记").setIcon("link").onClick(() => void this.app.workspace.openLinkText(linked, "", false)));
-    menu.addItem((i) => i.setTitle("编辑").setIcon("pencil").onClick(() => this.plugin.openEditModal(task)));
-    menu.addSeparator();
-    const today = startOfDay(new Date());
-    menu.addItem((i) => i.setTitle("排到今天").setIcon("calendar").onClick(() => this.setDate(task, today)));
-    menu.addItem((i) => i.setTitle("排到明天").setIcon("calendar").onClick(() => this.setDate(task, addDays(today, 1))));
-    menu.addItem((i) => i.setTitle("清除日期").setIcon("calendar-x").onClick(() => this.setDate(task, null)));
-    menu.addSeparator();
-    for (const p of PRIORITIES) {
-      menu.addItem((i) =>
-        i
-          .setTitle(`优先级：${PRIORITY_LABEL[p]}`)
-          .setChecked(task.priority === p)
-          .onClick(() => void this.plugin.store.updateTask(task, { priority: p }).catch((error: unknown) => new Notice(this.plugin.describeError(error))))
-      );
-    }
-    menu.addSeparator();
-    if (ctx.columns?.length) {
-      for (const col of ctx.columns) {
-        if (col.id === task.columnId) continue;
-        menu.addItem((i) => i.setTitle(`移到列：${col.name}`).setIcon("columns").onClick(() => void this.moveToColumn(task, col)));
-      }
-    }
-    menu.addItem((i) =>
-      i
-        .setTitle("移到项目…")
-        .setIcon("folder-input")
-        .onClick(() =>
+    const anchor = e.currentTarget instanceof HTMLElement ? e.currentTarget.getBoundingClientRect() : new DOMRect(e.clientX, e.clientY, 0, 0);
+    const store = this.plugin.store;
+    const fail = (error: unknown): void => {
+      new Notice(this.plugin.describeError(error));
+    };
+    this.dispatchPicker?.close();
+    this.dispatchPicker = openTaskActions(
+      task,
+      {
+        columns: ctx.columns ?? [],
+        linkedNote: firstLinkedPath(task.content),
+        dispatch: (rect) => this.openDispatchPicker(task, rect),
+        edit: () => this.plugin.openEditModal(task),
+        openNote: (path) => void this.app.workspace.openLinkText(path, "", false),
+        openWeb: () => window.open(taskWebUrl(task)),
+        setDate: (d) => this.setDate(task, d),
+        setPriority: (p) => void store.updateTask(task, { priority: p }).catch(fail),
+        moveToColumn: (col) => void this.moveToColumn(task, col),
+        moveToProject: () =>
           new ProjectSuggestModal(
             this.app,
-            this.plugin.store,
-            (p) => void this.plugin.store.moveTask(task, p.id).then(() => new Notice(`已移到「${p.name}」`)).catch((error: unknown) => new Notice(this.plugin.describeError(error))),
-            [this.plugin.store.projectKey(task.projectId)]
-          ).open()
-        )
+            store,
+            (p) => void store.moveTask(task, p.id).then(() => new Notice(`已移到「${p.name}」`)).catch(fail),
+            [store.projectKey(task.projectId)]
+          ).open(),
+        remove: () => void this.remove(task)
+      },
+      this.contentEl.doc,
+      anchor
     );
-    menu.addSeparator();
-    menu.addItem((i) => i.setTitle("在滴答清单网页版打开").setIcon("external-link").onClick(() => window.open(taskWebUrl(task))));
-    menu.addItem((i) => i.setTitle("删除").setIcon("trash").setWarning(true).onClick(() => void this.remove(task)));
-    menu.showAtMouseEvent(e);
   }
+
 
   private async moveToColumn(task: DidaTask, col: DidaColumn): Promise<void> {
     try {

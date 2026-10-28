@@ -3,7 +3,7 @@ import { setIcon } from "obsidian";
 export interface PopoverItemOptions {
   icon?: string;
   /** 单色 SVG logo，优先于 icon */
-  logo?: { viewBox: string; path: string } | null;
+  logo?: { viewBox: string; path: string; transform?: string } | null;
   /** 图标位置换成一个色点，用于标签颜色 */
   dot?: string | null;
   label: string;
@@ -116,6 +116,7 @@ export class QuickPopover {
       svg.setAttribute("fill", "currentColor");
       const path = box.doc.createElementNS(ns, "path");
       path.setAttribute("d", o.logo.path);
+      if (o.logo.transform) path.setAttribute("transform", o.logo.transform);
       svg.appendChild(path);
       box.appendChild(svg);
     } else if (o.icon) {
