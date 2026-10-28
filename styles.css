@@ -821,12 +821,18 @@ button.dida-ibtn svg {
   display: flex;
   align-items: flex-end;
   gap: 20px;
-  border-bottom: 1px solid var(--dida-line);
+  /* 底线画成内阴影：页签多了要横向滚动，负边距的写法会被滚动容器裁掉 */
+  box-shadow: inset 0 -1px 0 var(--dida-line);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
 }
 button.dida-tab {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
   height: 34px;
   padding: 0 1px;
-  margin-bottom: -1px;
   border: 0;
   border-bottom: 2px solid transparent;
   border-radius: 0;
@@ -846,6 +852,31 @@ button.dida-tab.is-active {
   color: var(--dida-text);
   font-weight: 600;
   border-bottom-color: var(--dida-accent);
+}
+.dida-tabs::-webkit-scrollbar {
+  display: none;
+}
+/* 置顶的项目：和基础页签之间一道短竖线；名字太长截断，emoji 小一号 */
+.dida-tab-divider {
+  flex: none;
+  width: 1px;
+  height: 14px;
+  margin: 0 -6px 10px;
+  background: var(--dida-line-strong);
+}
+button.dida-tab.is-pinned {
+  max-width: 140px;
+  gap: 4px;
+}
+.dida-tab-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dida-tab-emoji {
+  flex: none;
+  font-size: var(--dida-fs-sm);
+  line-height: 1;
 }
 .dida-tab-count {
   color: var(--dida-text-3);
@@ -1175,35 +1206,6 @@ button.dida-ov-row-action svg {
 .dida-tag.is-queue {
   background: var(--dida-accent-soft);
   color: var(--dida-accent-strong);
-}
-.dida-panel .dida-detail-actions button.is-dispatch {
-  border-color: var(--dida-accent-line);
-  background: var(--dida-accent-soft);
-  color: var(--dida-accent-strong);
-  font-weight: 500;
-}
-/* 派给默认去处 + 右侧箭头换一个，拼成一个分体按钮 */
-.dida-panel .dida-detail-actions button.is-dispatch:has(+ .is-dispatch-more) {
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
-}
-.dida-panel .dida-detail-actions button.is-dispatch-more {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  margin-left: -6px;
-  padding: 0;
-  border-color: var(--dida-accent-line);
-  border-left-color: rgba(var(--dida-accent-rgb), 0.25);
-  border-top-left-radius: 0;
-  border-bottom-left-radius: 0;
-  background: var(--dida-accent-soft);
-  color: var(--dida-accent-strong);
-}
-.dida-panel .dida-detail-actions button.is-dispatch-more svg {
-  width: 12px;
-  height: 12px;
 }
 .dida-setting-stack {
   flex-direction: column;
@@ -1764,6 +1766,15 @@ button.dida-qchip .dida-qchip-clear:hover {
   background: var(--dida-fill-strong);
 }
 
+/* 开着二级面板的那个按钮 / 那一行保持按下的样子 */
+.dida-pop button.dida-ta-chip.is-open {
+  color: var(--dida-text);
+  background: var(--dida-fill-strong);
+}
+.dida-pop-item.is-open {
+  background: var(--dida-fill);
+}
+
 .dida-pop button.dida-ta-chip.is-active {
   background: var(--dida-accent-soft);
   color: var(--dida-accent-strong);
@@ -2198,8 +2209,9 @@ button.dida-group-action:hover {
   background: var(--dida-surface-raised);
   box-shadow: var(--dida-e-float);
 }
-.dida-task:hover .dida-task-actions,
-.dida-task.is-expanded .dida-task-actions {
+/* 只管自己这一行的操作组：子任务行嵌在父卡片里，不能跟着父卡片一起显示 */
+.dida-task:hover > .dida-task-actions,
+.dida-task.is-expanded > .dida-task-actions {
   display: inline-flex;
 }
 .dida-task-actions button.dida-ibtn {
@@ -2236,34 +2248,6 @@ button.dida-group-action:hover {
 }
 .dida-task-details .dida-md a {
   color: var(--dida-accent);
-}
-.dida-detail-actions {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-.dida-panel .dida-detail-actions button {
-  height: var(--dida-h-sm);
-  padding: 0 10px;
-  border: 1px solid var(--dida-line);
-  border-radius: var(--dida-r-md);
-  background: var(--dida-surface);
-  font-size: var(--dida-fs-sm);
-  color: var(--dida-text);
-  box-shadow: none;
-  cursor: pointer;
-}
-.dida-panel .dida-detail-actions button:hover {
-  border-color: var(--dida-text-3);
-}
-.dida-panel .dida-detail-actions button.is-danger {
-  border: 0;
-  background: transparent;
-  color: var(--dida-text-3);
-  padding: 0 6px;
-}
-.dida-panel .dida-detail-actions button.is-danger:hover {
-  color: var(--dida-red);
 }
 
 /* ---------- 看板 ---------- */
@@ -2474,9 +2458,6 @@ button.dida-group-action:hover {
   .dida-header {
     padding-left: 0;
     padding-right: 0;
-  }
-  .dida-tabs {
-    max-width: 420px;
   }
   .dida-project-head {
     margin-top: 24px;
@@ -2723,26 +2704,6 @@ button.dida-group-action:hover {
   color: var(--dida-accent-strong);
   font-weight: 500;
 }
-.dida-date-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.dida-date-row:empty {
-  display: none;
-}
-.dida-modal input.dida-date-input,
-.dida-modal input.dida-time-input {
-  height: var(--dida-h-md);
-  border: 1px solid var(--dida-line);
-  border-radius: var(--dida-r-full);
-  background: var(--dida-surface);
-  padding: 0 12px;
-  font-size: var(--dida-fs-sm);
-  box-shadow: none;
-}
-
 .dida-note {
   position: relative;
 }
@@ -3350,6 +3311,7 @@ button.dida-group-action.is-more svg {
 
 /* 子任务：行内进度小标，展开卡片里的添加输入框 */
 .dida-subcount {
+  cursor: pointer;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -3397,4 +3359,35 @@ button.dida-group-action.is-more svg {
   border-color: rgba(var(--dida-accent-rgb), 0.45);
   background: var(--dida-surface);
   box-shadow: 0 0 0 3px rgba(var(--dida-accent-rgb), 0.1);
+}
+
+/* 父任务卡片里的子任务：完整的任务行，但在白卡里只用浅底悬停，字小一号 */
+.dida-subtasks {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0 0 2px -8px;
+}
+.dida-task.is-nested {
+  padding: 5px 8px;
+  border-radius: var(--dida-r-sm);
+}
+.dida-task.is-nested:hover,
+.dida-task.is-nested.is-expanded {
+  background: var(--dida-fill);
+  box-shadow: none;
+}
+.dida-task.is-nested .dida-task-title {
+  font-size: var(--dida-fs-md);
+}
+.dida-task.is-nested .dida-task-details {
+  margin-left: 26px;
+}
+.dida-task.is-nested .dida-task-actions {
+  top: 3px;
+  right: 4px;
+}
+/* 子任务进度可以点：点了展开父任务 */
+.dida-subcount:hover {
+  color: var(--dida-text);
 }

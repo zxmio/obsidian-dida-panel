@@ -1,9 +1,10 @@
 import { setIcon } from "obsidian";
 import type DidaPanelPlugin from "../main.ts";
-import { addDays, startOfDay } from "../dida/dates.ts";
+import { startOfDay } from "../dida/dates.ts";
 import { dateToken, parseQuickAdd, projectToken, setQuickToken, timeToken, toggleQuickTag, type QuickAddResult } from "../dida/quickAdd.ts";
 import { INBOX_ID, PRIORITY_LABEL, type DidaColumn, type DidaProject, type Priority } from "../dida/types.ts";
 import { isSeparatorProject } from "../store.ts";
+import { renderDatePanel, sameDay, type CalendarState } from "./datePanel.ts";
 import { QuickPopover } from "./quickPopover.ts";
 
 type ChipKind = "date" | "priority" | "tag" | "project" | "column";
@@ -23,21 +24,12 @@ export interface QuickChipsHost {
 }
 
 const WEEKDAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
-const TIMES: [number, number][] = [[9, 0], [12, 0], [14, 0], [18, 0], [20, 0]];
 const PRIORITY_ROWS: { p: Priority; key: string }[] = [
   { p: 5, key: "1" },
   { p: 3, key: "2" },
   { p: 1, key: "3" },
   { p: 0, key: "0" }
 ];
-
-function sameDay(a: Date, b: Date): boolean {
-  return startOfDay(a).getTime() === startOfDay(b).getTime();
-}
-
-function hint(d: Date): string {
-  return `${WEEKDAYS[d.getDay()]} ${d.getMonth() + 1}/${d.getDate()}`;
-}
 
 export function quickDateLabel(d: Date, allDay: boolean, now: Date = new Date()): string {
   const day = startOfDay(d);
@@ -57,8 +49,8 @@ export class QuickChips {
   private readonly host: QuickChipsHost;
   private pop: QuickPopover | null = null;
   private openKind: ChipKind | null = null;
-  /** 日历当前显示的月份（每月 1 日） */
-  private month: Date | null = null;
+  /** 日历当前显示的月份 */
+  private readonly cal: CalendarState = { month: null };
 
   constructor(row: HTMLElement, host: QuickChipsHost) {
     this.row = row;
@@ -178,7 +170,7 @@ export class QuickChips {
     const doc = this.row.doc;
     if (kind === "date") {
       const d = this.parsed().date;
-      this.month = new Date((d ?? new Date()).getFullYear(), (d ?? new Date()).getMonth(), 1);
+      this.cal.month = new Date((d ?? new Date()).getFullYear(), (d ?? new Date()).getMonth(), 1);
       this.pop = new QuickPopover(doc, rect, { cls: "is-date", render: (pop, body) => this.renderDate(pop, body), onClose });
     } else if (kind === "priority") {
       this.pop = new QuickPopover(doc, rect, {
@@ -210,93 +202,11 @@ export class QuickChips {
 
   private renderDate(pop: QuickPopover, body: HTMLElement): void {
     const parsed = this.parsed();
-    const today = startOfDay(new Date());
-    const setDate = (d: Date, word?: string): void => this.pick(setQuickToken(this.value, "date", word ?? dateToken(d)));
-
-    const quick = pop.section(body);
-    const saturday = addDays(today, (6 - today.getDay() + 7) % 7);
-    const monday = addDays(today, ((1 - today.getDay() + 7) % 7) || 7);
-    const rows: [string, string, Date, string][] = [
-      ["sun", "今天", today, "今天"],
-      ["sunrise", "明天", addDays(today, 1), "明天"],
-      ["sofa", "本周末", saturday, "周六"],
-      ["calendar-days", "下周一", monday, "下周一"]
-    ];
-    for (const [icon, label, d, word] of rows) {
-      pop.item(quick, { icon, label, hint: hint(d), checked: !!parsed.date && sameDay(parsed.date, d), onSelect: () => setDate(d, word) });
-    }
-
-    this.renderCalendar(pop, pop.section(body, undefined), parsed.date, today, setDate);
-
-    const timeSec = pop.section(body, "时间");
-    const grid = timeSec.createDiv({ cls: "dida-pop-times" });
-    const current = parsed.date && !parsed.allDay ? timeToken(parsed.date.getHours(), parsed.date.getMinutes()) : null;
-    const timeBtn = (text: string, active: boolean, onClick: () => void): void => {
-      const b = grid.createEl("button", { cls: "dida-pop-time", text, attr: { type: "button" } });
-      b.toggleClass("is-active", active);
-      b.addEventListener("mousedown", (e) => e.preventDefault());
-      b.addEventListener("click", onClick);
-    };
-    timeBtn("全天", !current, () => this.pick(setQuickToken(this.value, "time", null)));
-    for (const [h, m] of TIMES) {
-      const token = timeToken(h, m);
-      timeBtn(token, current === token, () => this.pick(setQuickToken(this.value, "time", token)));
-    }
-    const custom = grid.createEl("input", { cls: "dida-pop-time-input", type: "time", attr: { "aria-label": "自定义时间" } });
-    if (current && !TIMES.some(([h, m]) => timeToken(h, m) === current)) {
-      custom.value = current;
-      custom.addClass("is-active");
-    }
-    custom.addEventListener("change", () => {
-      const [h, m] = custom.value.split(":").map(Number);
-      if (Number.isFinite(h) && Number.isFinite(m)) this.pick(setQuickToken(this.value, "time", timeToken(h, m)));
+    renderDatePanel(pop, body, this.cal, { date: parsed.date, allDay: parsed.allDay }, {
+      day: (d, word) => this.pick(setQuickToken(this.value, "date", word ?? dateToken(d))),
+      time: (hm) => this.pick(setQuickToken(this.value, "time", hm ? timeToken(hm[0], hm[1]) : null)),
+      clear: () => this.pick(setQuickToken(setQuickToken(this.value, "date", null), "time", null))
     });
-
-    if (parsed.date) {
-      const foot = pop.section(body);
-      pop.item(foot, {
-        icon: "calendar-x",
-        label: "清除日期和时间",
-        cls: "is-muted",
-        onSelect: () => this.pick(setQuickToken(setQuickToken(this.value, "date", null), "time", null))
-      });
-    }
-  }
-
-  private renderCalendar(pop: QuickPopover, sec: HTMLElement, selected: Date | null, today: Date, setDate: (d: Date) => void): void {
-    const month = this.month ?? new Date(today.getFullYear(), today.getMonth(), 1);
-    const head = sec.createDiv({ cls: "dida-cal-head" });
-    head.createSpan({ cls: "dida-cal-title", text: `${month.getFullYear()}年${month.getMonth() + 1}月` });
-    const nav = head.createDiv({ cls: "dida-cal-nav" });
-    const navBtn = (icon: string, label: string, delta: number): void => {
-      const b = nav.createEl("button", { cls: "dida-cal-btn", attr: { type: "button", "aria-label": label } });
-      if (icon) setIcon(b, icon);
-      else b.setText(label);
-      b.addEventListener("mousedown", (e) => e.preventDefault());
-      b.addEventListener("click", () => {
-        this.month = delta === 0 ? new Date(today.getFullYear(), today.getMonth(), 1) : new Date(month.getFullYear(), month.getMonth() + delta, 1);
-        pop.refresh();
-      });
-    };
-    navBtn("chevron-left", "上个月", -1);
-    navBtn("", "今", 0);
-    navBtn("chevron-right", "下个月", 1);
-
-    const grid = sec.createDiv({ cls: "dida-cal-grid" });
-    for (const w of ["一", "二", "三", "四", "五", "六", "日"]) grid.createSpan({ cls: "dida-cal-wd", text: w });
-    // 周一开头，补齐上月的尾巴，固定画 6 行免得面板高度跳
-    const lead = (month.getDay() + 6) % 7;
-    const start = addDays(month, -lead);
-    for (let i = 0; i < 42; i++) {
-      const d = addDays(start, i);
-      const cell = grid.createEl("button", { cls: "dida-cal-day", text: String(d.getDate()), attr: { type: "button" } });
-      cell.toggleClass("is-outside", d.getMonth() !== month.getMonth());
-      cell.toggleClass("is-past", d < today);
-      cell.toggleClass("is-today", sameDay(d, today));
-      cell.toggleClass("is-selected", !!selected && sameDay(d, selected));
-      cell.addEventListener("mousedown", (e) => e.preventDefault());
-      cell.addEventListener("click", () => setDate(d));
-    }
   }
 
   // ---------- 优先级 ----------

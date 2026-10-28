@@ -53,6 +53,53 @@ test("子任务：刚建的子任务马上算进父任务下，已完成的不�
   assert.deepEqual(store.childrenOf("p").map((c) => c.title), ["新子任务"]);
 });
 
+test("子任务进度：删掉的子任务 id 残留在 childIds 里，不算进总数", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const parent = { id: "p", projectId: "p1", title: "父", status: 0, parentId: null, childIds: ["gone1", "gone2", "done1", "moved", "open1"], tags: null, sortOrder: 0 };
+  const open = { id: "open1", projectId: "p1", title: "未完成", status: 0, parentId: "p", tags: null, sortOrder: 1 };
+  const api = fakeApi([], [parent, open]);
+  const remote = {
+    done1: { id: "done1", status: 2, parentId: "p" },
+    moved: { id: "moved", status: 0, parentId: "other" }
+  };
+  const fetched = [];
+  api.getTask = async (id) => {
+    fetched.push(id);
+    if (remote[id]) return remote[id];
+    throw new Error("TickTick API error [resource_not_found]: task not found");
+  };
+  const store = new DidaStore(api, options);
+  await store.loadProject("p1");
+  let emitted = 0;
+  store.subscribe(() => (emitted += 1));
+  // 第一次只数得出缓存里未完成的，其余在后台查
+  assert.deepEqual(store.subtaskProgress(parent), { done: 0, total: 1 });
+  await new Promise((r) => setImmediate(r));
+  assert.ok(emitted > 0);
+  assert.deepEqual(store.subtaskProgress(parent), { done: 1, total: 2 });
+  // 查过的不再重复查
+  assert.deepEqual(fetched.sort(), ["done1", "gone1", "gone2", "moved"]);
+});
+
+test("新建任务：立刻出现在当前项目里，后台重拉期间旧数据不清空", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const existing = { id: "t1", projectId: "p1", title: "旧任务", status: 0, parentId: null, tags: null, sortOrder: 0 };
+  const api = fakeApi([], [existing]);
+  api.createTask = async (input) => ({ id: "t2", projectId: input.projectId, title: input.title, status: 0, parentId: null, tags: [], sortOrder: 1, columnId: null });
+  api.listTodayTasks = async () => [];
+  api.listOverdueTasks = async () => [];
+  const store = new DidaStore(api, options);
+  await store.loadProject("p1");
+  const seen = [];
+  store.subscribe(() => seen.push(store.getProject("p1")?.tasks.map((x) => x.title) ?? null));
+  await store.createTask({ title: "新任务", projectId: "p1", priority: 0, tags: [], content: "" });
+  assert.deepEqual(seen[0], ["旧任务", "新任务"]);
+  await new Promise((r) => setImmediate(r));
+  // 重拉回来的（服务器还没读到新任务，靠待确认列表补上）和手上一样，不再重画，也从没出现过空项目
+  assert.ok(seen.every((titles) => titles !== null && titles.length === 2));
+  assert.equal(seen.length, 1);
+});
+
 test("项目：新建立刻进列表，归档立刻从列表和缓存里拿掉", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const api = fakeApi([]);

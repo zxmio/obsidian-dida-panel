@@ -1,6 +1,8 @@
 import { setIcon } from "obsidian";
 import { addDays, parseDidaDate, startOfDay } from "../dida/dates.ts";
 import { PRIORITIES, PRIORITY_LABEL, type DidaColumn, type DidaTask, type Priority } from "../dida/types.ts";
+import { timeToken } from "../dida/quickAdd.ts";
+import { openDatePicker, sameDay } from "./datePanel.ts";
 import { QuickPopover } from "./quickPopover.ts";
 
 export interface TaskActionsHost {
@@ -12,7 +14,8 @@ export interface TaskActionsHost {
   edit: () => void;
   openNote: (path: string) => void;
   openWeb: () => void;
-  setDate: (d: Date | null) => void;
+  /** allDay 不传就是全天 */
+  setDate: (d: Date | null, allDay?: boolean) => void;
   setPriority: (p: Priority) => void;
   moveToColumn: (col: DidaColumn) => void;
   moveToProject: () => void;
@@ -25,8 +28,9 @@ export interface TaskActionsHost {
   setParent: (parentId: string | null) => void;
 }
 
-function sameDay(a: Date, b: Date): boolean {
-  return startOfDay(a).getTime() === startOfDay(b).getTime();
+function dueLabel(d: Date, allDay: boolean): string {
+  const day = `${d.getMonth() + 1}月${d.getDate()}日`;
+  return allDay ? day : `${day} ${timeToken(d.getHours(), d.getMinutes())}`;
 }
 
 /**
@@ -39,6 +43,9 @@ export function openTaskActions(task: DidaTask, host: TaskActionsHost, doc: Docu
     pop.close();
     fn();
   };
+  /** 当前开着的二级面板（日期、选父任务），同一时间只开一个 */
+  let sub: QuickPopover | null = null;
+  const closeSub = (): void => sub?.close();
   const pop: QuickPopover = new QuickPopover(doc, rect, {
     cls: "is-task-actions",
     render: (p, body) => {
@@ -78,6 +85,21 @@ export function openTaskActions(task: DidaTask, host: TaskActionsHost, doc: Docu
         dateChip("今天", today, !!due && sameDay(due, today));
         dateChip("明天", addDays(today, 1), !!due && sameDay(due, addDays(today, 1)));
         dateChip("下周一", monday, !!due && sameDay(due, monday));
+        const preset = [today, addDays(today, 1), monday];
+        const custom = !!due && !preset.some((d) => sameDay(due, d));
+        // 其他日子和具体时刻：日期面板作为二级面板开在旁边，操作面板不关
+        const other = chip(dateRow, custom && due ? dueLabel(due, task.isAllDay !== false) : "其他…", custom, () => {
+          if (sub) return closeSub();
+          other.addClass("is-open");
+          sub = openDatePicker(doc, other.getBoundingClientRect(), { date: due, allDay: task.isAllDay !== false }, (next) => done(() => host.setDate(next.date, next.allDay)), {
+            parent: pop,
+            trigger: other,
+            onClose: () => {
+              sub = null;
+              other.removeClass("is-open");
+            }
+          });
+        }, "calendar", "选择其他日期和时间");
         if (due) chip(dateRow, "", false, () => done(() => host.setDate(null)), "x", "清除日期");
 
         // 优先级：从高到低排，和快速添加的优先级面板一致
@@ -107,14 +129,17 @@ export function openTaskActions(task: DidaTask, host: TaskActionsHost, doc: Docu
         p.item(move, { icon: "corner-left-up", label: "转成独立任务", onSelect: () => done(() => host.setParent(null)) });
       } else if (open && !(task.childIds?.length)) {
         // 面板只按一层缩进显示子任务，所以有子任务的任务不再挂到别处
-        p.item(move, {
+        const parentRow = p.item(move, {
           icon: "corner-down-right",
           label: "设为子任务…",
           onSelect: () => {
-            // 选父任务的面板接在原位置出现，像同一个面板翻了一页
-            const r = pop.el.getBoundingClientRect();
-            pop.close();
-            openParentPicker(task, host.parentCandidates(), doc, new DOMRect(r.left, r.top - 4, r.width, 0), (id) => host.setParent(id));
+            if (sub) return closeSub();
+            const r = parentRow.getBoundingClientRect();
+            parentRow.addClass("is-open");
+            sub = openParentPicker(task, host.parentCandidates(), doc, r, (id) => done(() => host.setParent(id)), pop, parentRow, () => {
+              sub = null;
+              parentRow.removeClass("is-open");
+            });
           }
         });
       }
@@ -133,7 +158,7 @@ function row(parent: HTMLElement, label: string): HTMLElement {
   return r.createDiv({ cls: "dida-ta-chips" });
 }
 
-function chip(parent: HTMLElement, label: string, active: boolean, run: () => void, icon?: string, aria?: string, cls = ""): void {
+function chip(parent: HTMLElement, label: string, active: boolean, run: () => void, icon?: string, aria?: string, cls = ""): HTMLButtonElement {
   const b = parent.createEl("button", { cls: `dida-ta-chip ${cls}`.trim(), attr: { type: "button" } });
   if (aria) b.setAttribute("aria-label", aria);
   b.toggleClass("is-active", active);
@@ -141,11 +166,22 @@ function chip(parent: HTMLElement, label: string, active: boolean, run: () => vo
   if (label) b.createSpan({ text: label });
   b.addEventListener("mousedown", (e) => e.preventDefault());
   b.addEventListener("click", run);
+  return b;
 }
 
 /** 选父任务：搜索框 + 同项目任务列表，回车或点击即挂上。 */
-function openParentPicker(task: DidaTask, candidates: DidaTask[], doc: Document, rect: DOMRect, onPick: (id: string) => void): QuickPopover {
+function openParentPicker(
+  task: DidaTask,
+  candidates: DidaTask[],
+  doc: Document,
+  rect: DOMRect,
+  onPick: (id: string) => void,
+  parent: QuickPopover,
+  trigger: HTMLElement,
+  onClose: () => void
+): QuickPopover {
   const pop: QuickPopover = new QuickPopover(doc, rect, {
+    parent,
     cls: "is-parent-picker",
     search: "搜索要挂到哪条任务下",
     render: (p, body, query) => {
@@ -165,7 +201,8 @@ function openParentPicker(task: DidaTask, candidates: DidaTask[], doc: Document,
       }
       if (!hits.length) sec.createDiv({ cls: "dida-pop-empty", text: candidates.length ? "没有匹配的任务" : "这个项目里没有别的任务可挂" });
     },
-    onClose: () => {}
+    onClose,
+    trigger
   });
   return pop;
 }

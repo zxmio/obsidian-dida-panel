@@ -74,16 +74,16 @@ export class ProjectModal extends Modal {
     const footer = form.createDiv({ cls: "dida-form-footer" });
     const project = this.opts.project;
     if (project) {
-      const archive = footer.createEl("button", { type: "button", cls: "is-ghost-danger", text: "归档项目" });
+      const archive = footer.createEl("button", { cls: "is-ghost-danger", text: "归档项目", attr: { type: "button" } });
       archive.addEventListener("click", () => void this.archive(project));
     }
     footer.createDiv({ cls: "dida-form-footer-spacer" });
-    footer.createEl("button", { type: "button", cls: "is-outline", text: "取消" }).addEventListener("click", () => this.close());
-    footer.createEl("button", { type: "submit", cls: "is-primary", text: this.isEdit ? "保存" : "创建项目" });
+    footer.createEl("button", { cls: "is-outline", text: "取消", attr: { type: "button" } }).addEventListener("click", () => this.close());
+    footer.createEl("button", { cls: "is-primary", text: this.isEdit ? "保存" : "创建项目", attr: { type: "submit" } });
   }
 
   private pill(parent: HTMLElement, text: string, on: boolean, onClick: () => void, cls = ""): HTMLButtonElement {
-    const b = parent.createEl("button", { type: "button", cls: `dida-col ${cls}`.trim(), text });
+    const b = parent.createEl("button", { cls: `dida-col ${cls}`.trim(), text, attr: { type: "button" } });
     b.toggleClass("is-set", on);
     b.addEventListener("click", onClick);
     return b;
@@ -121,7 +121,7 @@ export class ProjectModal extends Modal {
     row.createSpan({ cls: "dida-columns-label", text: "颜色" });
     const swatches = row.createDiv({ cls: "dida-swatches" });
     const swatch = (color: string | null): void => {
-      const b = swatches.createEl("button", { type: "button", cls: "dida-swatch", attr: { "aria-label": color ?? "无颜色" } });
+      const b = swatches.createEl("button", { cls: "dida-swatch", attr: { type: "button", "aria-label": color ?? "无颜色" } });
       if (color) b.style.background = color;
       else b.addClass("is-none");
       b.toggleClass("is-set", (this.color?.toUpperCase() ?? null) === (color?.toUpperCase() ?? null));

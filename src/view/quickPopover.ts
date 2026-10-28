@@ -31,6 +31,10 @@ export interface QuickPopoverOptions {
   /** 面板里按下的字符键，返回 true 表示已处理（如优先级的 1 2 3 0） */
   onKey?: (key: string) => boolean;
   onClose: (byKeyboard: boolean) => void;
+  /** 二级面板：贴在父面板旁边打开，父面板保持打开；点父面板、Esc 只关这一层 */
+  parent?: QuickPopover;
+  /** 打开它的那个按钮：点它由按钮自己决定开关，不当成点外面 */
+  trigger?: HTMLElement;
 }
 
 /**
@@ -46,9 +50,13 @@ export class QuickPopover {
   private closed = false;
   private readonly anchorRect: DOMRect;
   private readonly opts: QuickPopoverOptions;
+  private readonly children = new Set<QuickPopover>();
   private readonly onOutside = (e: MouseEvent): void => {
     const target = e.target;
     if (!(target instanceof Node) || this.el.contains(target)) return;
+    // 点在二级面板里不算点外面
+    for (const child of this.children) if (child.el.contains(target)) return;
+    if (this.opts.trigger?.contains(target)) return;
     // 点快捷按钮由按钮自己决定是切换还是关闭
     if (target instanceof Element && target.closest(".dida-qchip")) return;
     this.close();
@@ -59,6 +67,7 @@ export class QuickPopover {
   constructor(doc: Document, rect: DOMRect, opts: QuickPopoverOptions) {
     this.opts = opts;
     this.anchorRect = rect;
+    opts.parent?.children.add(this);
     this.el = doc.body.createDiv({ cls: `dida-pop ${opts.cls}` });
     this.el.tabIndex = -1;
     if (opts.search !== undefined) {
@@ -161,6 +170,12 @@ export class QuickPopover {
   close(byKeyboard = false): void {
     if (this.closed) return;
     this.closed = true;
+    for (const child of [...this.children]) child.close();
+    const parent = this.opts.parent;
+    if (parent) {
+      parent.children.delete(this);
+      if (!parent.closed) parent.el.focus();
+    }
     const doc = this.el.doc;
     doc.removeEventListener("mousedown", this.onOutside, true);
     doc.win.removeEventListener("resize", this.onResize);
@@ -207,6 +222,15 @@ export class QuickPopover {
     const rect = this.anchorRect;
     const width = this.el.offsetWidth;
     const height = this.el.offsetHeight;
+    if (this.opts.parent) {
+      // 二级面板放在父面板右边、和触发它的那一行对齐；右边放不下放左边
+      const pr = this.opts.parent.el.getBoundingClientRect();
+      const right = pr.right + 6;
+      const sideLeft = right + width <= win.innerWidth - 8 ? right : pr.left - width - 6;
+      this.el.style.left = `${Math.max(8, sideLeft)}px`;
+      this.el.style.top = `${Math.max(8, Math.min(rect.top - 8, win.innerHeight - height - 8))}px`;
+      return;
+    }
     const left = Math.max(8, Math.min(rect.left, win.innerWidth - width - 8));
     const below = rect.bottom + 4;
     const top = below + height > win.innerHeight - 8 && rect.top - height - 4 > 8 ? rect.top - height - 4 : below;

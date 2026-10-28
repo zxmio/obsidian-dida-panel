@@ -1,10 +1,11 @@
 import { Modal, Notice, setIcon } from "obsidian";
 import type DidaPanelPlugin from "../main.ts";
-import { CLEAR_DATE, addDays, formatDidaDate, parseDidaDate, startOfDay, toDateInputValue, toTimeInputValue } from "../dida/dates.ts";
+import { CLEAR_DATE, formatDidaDate, parseDidaDate, startOfDay, toDateInputValue, toTimeInputValue } from "../dida/dates.ts";
 import { appendNoteLink } from "../dida/deeplink.ts";
 import { INBOX_ID, PRIORITIES, PRIORITY_LABEL, type DidaColumn, type DidaTask, type Priority, type TaskInput } from "../dida/types.ts";
 import { ProjectSuggestModal } from "./projectSuggest.ts";
-import { openActionMenu, type ActionMenuSpec } from "./actionMenu.ts";
+import { openActionMenu } from "./actionMenu.ts";
+import { openDatePicker } from "./datePanel.ts";
 
 export interface TaskModalOptions {
   task?: DidaTask;
@@ -35,13 +36,11 @@ export class TaskModal extends Modal {
   private columnsFor: string | null = null;
   private submitting = false;
   private continueAdding = false;
-  private customDate = false;
   private tagEditing = false;
   private chipsEl: HTMLElement | null = null;
   private columnsEl: HTMLElement | null = null;
   /** 明确放在「未分组」：新建时用户选的，或编辑一条本来就没分组的任务 */
   private noColumn = false;
-  private dateRowEl: HTMLElement | null = null;
 
   constructor(private readonly plugin: DidaPanelPlugin, private readonly opts: TaskModalOptions) {
     super(plugin.app);
@@ -153,10 +152,8 @@ export class TaskModal extends Modal {
 
     const props = form.createDiv({ cls: "dida-props" });
     this.chipsEl = props.createDiv({ cls: "dida-chips" });
-    this.dateRowEl = props.createDiv({ cls: "dida-date-row" });
     this.columnsEl = props.createDiv({ cls: "dida-columns" });
     this.renderChips();
-    this.renderDateRow();
 
     const note = form.createDiv({ cls: "dida-note" });
     const textarea = note.createEl("textarea", { cls: "dida-note-input", attr: { "aria-label": "备注", rows: "6" } });
@@ -164,7 +161,7 @@ export class TaskModal extends Modal {
     textarea.placeholder = "正文：粘贴或插入笔记链接\n来源：素材出处";
     textarea.addEventListener("input", () => (this.state.content = textarea.value));
     const current = this.plugin.currentNote();
-    const linkBtn = note.createEl("button", { type: "button", cls: "dida-linkbtn" });
+    const linkBtn = note.createEl("button", { cls: "dida-linkbtn", attr: { type: "button" } });
     setIcon(linkBtn, "link");
     const noteName = current ? (current.path.split("/").pop() ?? current.path).replace(/\.md$/, "") : null;
     linkBtn.createSpan({ text: noteName ? `插入当前笔记：${noteName}` : "插入当前笔记" });
@@ -188,16 +185,16 @@ export class TaskModal extends Modal {
       label.createSpan({ text: "创建后继续添加" });
     }
     footer.createDiv({ cls: "dida-form-footer-spacer" });
-    const cancel = footer.createEl("button", { type: "button", cls: "is-outline", text: "取消" });
+    const cancel = footer.createEl("button", { cls: "is-outline", text: "取消", attr: { type: "button" } });
     cancel.addEventListener("click", () => this.close());
-    const submit = footer.createEl("button", { type: "submit", cls: "is-primary", text: this.isEdit ? "保存" : "创建待办" });
+    const submit = footer.createEl("button", { cls: "is-primary", text: this.isEdit ? "保存" : "创建待办", attr: { type: "submit" } });
     submit.createSpan({ cls: "dida-kbd", text: "⌘↩" });
 
     this.renderColumns();
   }
 
   private chip(parent: HTMLElement, text: string, opts: { set?: boolean; dashed?: boolean; icon?: "chevron-down" | "x"; label?: string }): HTMLButtonElement {
-    const btn = parent.createEl("button", { type: "button", cls: "dida-chip", attr: { "aria-label": opts.label ?? text } });
+    const btn = parent.createEl("button", { cls: "dida-chip", attr: { type: "button", "aria-label": opts.label ?? text } });
     if (opts.set) btn.addClass("is-set");
     if (opts.dashed) btn.addClass("is-dashed");
     btn.createSpan({ cls: "dida-chip-text", text });
@@ -227,7 +224,7 @@ export class TaskModal extends Modal {
 
     const dateLabel = this.dateLabel();
     const date = this.chip(host, dateLabel ?? "日期", { set: !!dateLabel, icon: "chevron-down", label: "日期" });
-    date.addEventListener("click", () => openActionMenu(this.modalEl.doc, date.getBoundingClientRect(), this.dateActions()));
+    date.addEventListener("click", () => this.openDate(date.getBoundingClientRect()));
 
     const prio = this.state.priority;
     const prioChip = this.chip(host, prio ? `${PRIORITY_LABEL[prio]}优先级` : "优先级", { set: prio > 0, icon: "chevron-down", label: "优先级" });
@@ -270,6 +267,8 @@ export class TaskModal extends Modal {
           e.preventDefault();
           commit();
         } else if (e.key === "Escape") {
+          // 只退出标签输入；不拦的话 Obsidian 会把整个弹窗一起关掉
+          e.preventDefault();
           this.tagEditing = false;
           this.renderChips();
         }
@@ -285,55 +284,19 @@ export class TaskModal extends Modal {
     }
   }
 
-  private dateActions(): ActionMenuSpec {
-    const today = startOfDay(new Date());
-    const pick = (d: Date | null): void => {
-      this.state.date = d ? toDateInputValue(d) : "";
-      if (!d) this.state.time = "";
-      this.customDate = false;
-      this.renderChips();
-      this.renderDateRow();
-    };
-    return {
-      groups: [
-        [
-          { icon: "sun", label: "今天", run: () => pick(today) },
-          { icon: "sunrise", label: "明天", run: () => pick(addDays(today, 1)) },
-          { icon: "calendar-days", label: "下周一", run: () => pick(addDays(today, ((8 - today.getDay()) % 7) || 7)) },
-          {
-            icon: "calendar-clock",
-            label: "自定义日期和时间…",
-            run: () => {
-              this.customDate = true;
-              if (!this.state.date) this.state.date = toDateInputValue(today);
-              this.renderChips();
-              this.renderDateRow();
-            }
-          }
-        ],
-        this.state.date ? [{ icon: "calendar-x", label: "清除日期", run: () => pick(null) }] : []
-      ]
-    };
-  }
-
-  private renderDateRow(): void {
-    const host = this.dateRowEl;
-    if (!host) return;
-    host.empty();
-    if (!this.customDate) return;
-    const date = host.createEl("input", { type: "date", cls: "dida-date-input", attr: { "aria-label": "日期" } });
-    date.value = this.state.date;
-    date.addEventListener("change", () => {
-      this.state.date = date.value;
+  /** 日期面板和快速添加的日期按钮是同一个：常用日期、月历、时刻，选完直接写回。 */
+  private openDate(rect: DOMRect): void {
+    let value: Date | null = null;
+    if (this.state.date) {
+      const [y, m, d] = this.state.date.split("-").map(Number);
+      const [hh, mm] = (this.state.time || "00:00").split(":").map(Number);
+      value = new Date(y, m - 1, d, hh, mm);
+    }
+    openDatePicker(this.modalEl.doc, rect, { date: value, allDay: !this.state.time }, (next) => {
+      this.state.date = next.date ? toDateInputValue(next.date) : "";
+      this.state.time = next.date && !next.allDay ? toTimeInputValue(next.date) : "";
       this.renderChips();
     });
-    const time = host.createEl("input", { type: "time", cls: "dida-time-input", attr: { "aria-label": "时间" } });
-    time.value = this.state.time;
-    time.addEventListener("change", () => {
-      this.state.time = time.value;
-      this.renderChips();
-    });
-    window.setTimeout(() => date.focus(), 0);
   }
 
   private renderColumns(): void {
@@ -343,7 +306,7 @@ export class TaskModal extends Modal {
     if (!this.columns.length) return;
     host.createSpan({ cls: "dida-columns-label", text: "分组" });
     for (const col of this.columns) {
-      const pill = host.createEl("button", { type: "button", cls: "dida-col", text: col.name });
+      const pill = host.createEl("button", { cls: "dida-col", text: col.name, attr: { type: "button" } });
       pill.toggleClass("is-set", !this.noColumn && this.state.columnId === col.id);
       pill.addEventListener("click", () => {
         this.state.columnId = col.id;
@@ -353,7 +316,7 @@ export class TaskModal extends Modal {
     }
     // 接口改不回「没有分组」，所以编辑已分组的任务时不给这个选项
     if (this.isEdit && this.opts.task?.columnId) return;
-    const none = host.createEl("button", { type: "button", cls: "dida-col is-none", text: "未分组" });
+    const none = host.createEl("button", { cls: "dida-col is-none", text: "未分组", attr: { type: "button" } });
     none.toggleClass("is-set", this.noColumn);
     none.addEventListener("click", () => {
       this.state.columnId = null;

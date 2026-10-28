@@ -1,7 +1,7 @@
 import { ItemView, MarkdownRenderer, Notice, setIcon, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
 import type DidaPanelPlugin from "../main.ts";
 import type { PanelTab, ProjectViewMode } from "../settings.ts";
-import { CLEAR_DATE, addDays, describeDue, formatDidaDate, relativeTime, startOfDay } from "../dida/dates.ts";
+import { CLEAR_DATE, describeDue, formatDidaDate, relativeTime, startOfDay } from "../dida/dates.ts";
 import { firstLinkedPath } from "../dida/deeplink.ts";
 import { parseQuickAdd } from "../dida/quickAdd.ts";
 import { INBOX_ID, type DidaColumn, type DidaProject, type DidaTask, type TaskInput, type TaskSearchHit } from "../dida/types.ts";
@@ -38,6 +38,8 @@ interface TaskRenderContext {
   card?: boolean;
   /** 不显示这个标签（队列视图里「派给AI」是前提，不用再写） */
   hideTag?: string;
+  /** 画在父任务卡片里的子任务行 */
+  nested?: boolean;
 }
 
 /** 看板的一条泳道。项目列、收件箱列、今天的「过期 / 今天 / 已完成」都走它。 */
@@ -106,6 +108,8 @@ export class DidaPanelView extends ItemView {
   private quickChips: QuickChips | null = null;
   /** 刚在这条任务下加过子任务：重画后把光标放回它的子任务输入框，方便连续添加 */
   private subtaskFocus: string | null = null;
+  /** 父任务卡片里展开的那条子任务 */
+  private expandedChild: string | null = null;
   /** 刚在这条泳道顶部加过任务：重画后把光标放回去 */
   private laneAddFocus: string | null = null;
   /** 点过「展开」的泳道，显示全部卡片 */
@@ -427,7 +431,11 @@ export class DidaPanelView extends ItemView {
 
   private renderTabs(root: HTMLElement): void {
     const tabs = root.createDiv({ cls: "dida-tabs" });
-    const inboxCount = this.plugin.store.getProject(INBOX_ID)?.tasks.length;
+    const store = this.plugin.store;
+    const inboxCount = store.getProject(INBOX_ID)?.tasks.length;
+    const pinned = this.pinnedProjects();
+    // 正在看置顶的项目时，亮的是它自己的页签，不是「项目」
+    const onPinned = this.tab === "project" && !this.queueMode && !!this.projectId && pinned.some((p) => p.id === this.projectId);
     const defs: Array<[PanelTab, string, number | undefined]> = [
       ["today", "今天", undefined],
       ["inbox", "收件箱", inboxCount],
@@ -437,10 +445,46 @@ export class DidaPanelView extends ItemView {
     for (const [tab, label, count] of defs) {
       const btn = tabs.createEl("button", { cls: "dida-tab", text: label, attr: { type: "button" } });
       if (count !== undefined && count > 0) btn.createSpan({ cls: "dida-tab-count", text: String(count) });
-      btn.toggleClass("is-active", this.tab === tab);
+      btn.toggleClass("is-active", this.tab === tab && !(tab === "project" && onPinned));
       btn.addEventListener("click", () => this.setTab(tab));
     }
+    if (!pinned.length) return;
+    tabs.createSpan({ cls: "dida-tab-divider" });
+    for (const project of pinned) {
+      const { emoji, name } = splitEmoji(project.name);
+      const btn = tabs.createEl("button", { cls: "dida-tab is-pinned", attr: { type: "button", title: project.name } });
+      if (emoji) btn.createSpan({ cls: "dida-tab-emoji", text: emoji });
+      btn.createSpan({ cls: "dida-tab-label", text: name || project.name });
+      const count = store.getProject(project.id)?.tasks.length ?? store.overview?.counts.get(store.projectKey(project.id))?.undone;
+      if (count) btn.createSpan({ cls: "dida-tab-count", text: String(count) });
+      btn.toggleClass("is-active", onPinned && this.projectId === project.id);
+      btn.addEventListener("click", () => this.showProject(project.id));
+      btn.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        this.showActions(new DOMRect(e.clientX, e.clientY, 0, 0), this.projectActions(project, false));
+      });
+    }
+    // 页签多了横向滚动，把亮着的那个滚进视野
+    tabs.querySelector<HTMLElement>(".dida-tab.is-active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
+
+  /** 置顶的项目：按置顶先后排，已归档或删掉的跳过（不改设置，项目回来还在原位） */
+  private pinnedProjects(): DidaProject[] {
+    const store = this.plugin.store;
+    return this.plugin.settings.pinnedProjects
+      .map((id) => store.projects.find((p) => p.id === id))
+      .filter((p): p is DidaProject => !!p && p.id !== INBOX_ID);
+  }
+
+  private async togglePin(project: DidaProject): Promise<void> {
+    const settings = this.plugin.settings;
+    const pinned = settings.pinnedProjects.includes(project.id);
+    settings.pinnedProjects = pinned ? settings.pinnedProjects.filter((id) => id !== project.id) : [...settings.pinnedProjects, project.id];
+    await this.plugin.saveSettings();
+    new Notice(pinned ? `已取消置顶「${project.name}」` : `已把「${project.name}」置顶到页签栏`);
+    this.render();
+  }
+
 
   /** 项目详情头部：返回 · 项目名与数字 · 列表/看板 · 更多 */
   private renderProjectHead(root: HTMLElement, projectId: string, snap: ProjectSnapshot | null, boardMode: boolean): void {
@@ -606,7 +650,8 @@ export class DidaPanelView extends ItemView {
       taskInput.dueDate = when;
       taskInput.isAllDay = parsed.allDay;
     }
-    input.disabled = true;
+    // 用只读而不是禁用：禁用会把焦点踢掉，加完一条就没法接着打下一条
+    input.readOnly = true;
     try {
       await this.plugin.store.createTask(taskInput);
       this.quickValue = "";
@@ -614,7 +659,7 @@ export class DidaPanelView extends ItemView {
     } catch (error) {
       new Notice(`添加失败：${this.plugin.describeError(error)}`, 6000);
     } finally {
-      input.disabled = false;
+      input.readOnly = false;
       this.render();
     }
   }
@@ -872,7 +917,17 @@ export class DidaPanelView extends ItemView {
         [
           ...(inside ? [] : [{ icon: "arrow-right", label: "打开", run: () => this.showProject(project.id) }]),
           { icon: "plus", label: "新建待办…", run: () => this.plugin.openCreateModal({ projectId: project.id }) },
-          { icon: "layout-dashboard", label: "在主窗格打开看板", run: () => void this.plugin.openBoardInMainPane(project.id) }
+          { icon: "layout-dashboard", label: "在主窗格打开看板", run: () => void this.plugin.openBoardInMainPane(project.id) },
+          // 收件箱本来就是页签，不用置顶
+          ...(key === INBOX_ID
+            ? []
+            : [
+                {
+                  icon: this.plugin.settings.pinnedProjects.includes(project.id) ? "pin-off" : "pin",
+                  label: this.plugin.settings.pinnedProjects.includes(project.id) ? "取消置顶" : "置顶到页签栏",
+                  run: () => void this.togglePin(project)
+                }
+              ])
         ],
         // 收件箱是滴答内置的，不能改名也不能归档
         key === INBOX_ID
@@ -1145,7 +1200,8 @@ export class DidaPanelView extends ItemView {
       const parsed = parseQuickAdd(input.value);
       if (!parsed.title || busy) return;
       busy = true;
-      input.disabled = true;
+      input.readOnly = true;
+      this.laneAddFocus = key;
       const taskInput: TaskInput = {
         title: parsed.title,
         projectId: prefill.projectId ?? this.currentProjectId(),
@@ -1168,12 +1224,11 @@ export class DidaPanelView extends ItemView {
       try {
         await this.plugin.store.createTask(taskInput);
         input.value = "";
-        this.laneAddFocus = key;
       } catch (error) {
         new Notice(`添加失败：${this.plugin.describeError(error)}`, 6000);
       } finally {
         busy = false;
-        input.disabled = false;
+        input.readOnly = false;
         input.focus();
       }
     });
@@ -1315,12 +1370,15 @@ export class DidaPanelView extends ItemView {
       cards.createDiv({ cls: "dida-lane-drop" });
       // 长泳道先显示前 LANE_LIMIT 条，其余收进「还有 N 条 · 展开」
       const open = this.expandedLanes.has(spec.key);
-      const shown = open ? spec.tasks : spec.tasks.slice(0, LANE_LIMIT);
+      // 父任务也在这条泳道时，子任务收进父任务卡片里，不单独占一张卡
+      const ids = new Set(spec.tasks.map((t) => t.id));
+      const tops = spec.tasks.filter((t) => !(t.parentId && ids.has(t.parentId)));
+      const shown = open ? tops : tops.slice(0, LANE_LIMIT);
       for (const t of shown) this.renderTask(cards, t, spec.ctx);
-      if (spec.tasks.length > LANE_LIMIT) {
+      if (tops.length > LANE_LIMIT) {
         const more = cards.createDiv({ cls: "dida-ghost" });
         setIcon(more.createSpan(), open ? "chevron-up" : "plus");
-        more.createSpan({ text: open ? "收起" : `还有 ${spec.tasks.length - LANE_LIMIT} 条 · 展开` });
+        more.createSpan({ text: open ? "收起" : `还有 ${tops.length - LANE_LIMIT} 条 · 展开` });
         more.addEventListener("click", () => {
           if (open) this.expandedLanes.delete(spec.key);
           else this.expandedLanes.add(spec.key);
@@ -1386,10 +1444,12 @@ export class DidaPanelView extends ItemView {
   private renderTask(parent: HTMLElement, task: DidaTask, ctx: TaskRenderContext): void {
     const row = parent.createDiv({ cls: "dida-task" });
     if (ctx.card) row.addClass("is-card");
-    if (task.parentId && !ctx.card) row.addClass("is-child");
+    if (task.parentId && !ctx.card && !ctx.nested) row.addClass("is-child");
     if (task.status === 2) row.addClass("is-done");
-    const expanded = this.expanded === task.id;
+    // 父任务卡片里的子任务单独记展开状态，展开子任务时父任务保持展开
+    const expanded = ctx.nested ? this.expandedChild === task.id : this.expanded === task.id;
     if (expanded) row.addClass("is-expanded");
+    if (ctx.nested) row.addClass("is-nested");
 
     if (ctx.card && task.status !== 2) {
       row.draggable = true;
@@ -1416,7 +1476,11 @@ export class DidaPanelView extends ItemView {
     const body = row.createDiv({ cls: "dida-task-body" });
     const title = body.createDiv({ cls: "dida-task-title", text: task.title || "（无标题）" });
     title.addEventListener("click", () => {
-      this.expanded = expanded ? null : task.id;
+      if (ctx.nested) this.expandedChild = expanded ? null : task.id;
+      else {
+        this.expanded = expanded ? null : task.id;
+        this.expandedChild = null;
+      }
       this.render();
     });
 
@@ -1426,14 +1490,20 @@ export class DidaPanelView extends ItemView {
       meta.createSpan({ cls: `dida-due is-${due.state}`, text: due.label });
     }
     // 优先级看勾选框的圈（高红、中深灰），属性行不再单放「高 / 中」
-    // 子任务进度：childIds 含已完成的，缓存里只有未完成的，两者一减就是完成数
-    const open = this.plugin.store.childrenOf(task.id).length;
-    const total = Math.max(task.childIds?.length ?? 0, open);
+    // 子任务进度：只数还存在的子任务（删掉的子任务 id 会残留在 childIds 里，见 store.subtaskProgress）
+    const { done, total } = this.plugin.store.subtaskProgress(task);
     if (total) {
-      const sub = meta.createSpan({ cls: "dida-subcount", attr: { "aria-label": `子任务完成 ${total - open} / ${total}` } });
+      const sub = meta.createSpan({ cls: "dida-subcount", attr: { "aria-label": `子任务完成 ${done} / ${total}` } });
       setIcon(sub.createSpan({ cls: "dida-subcount-icon" }), "list-tree");
-      sub.createSpan({ text: `${total - open}/${total}` });
-      sub.toggleClass("is-done", open === 0);
+      sub.createSpan({ text: `${done}/${total}` });
+      sub.toggleClass("is-done", done === total);
+      // 点进度直接展开父任务，看到子任务列表
+      sub.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.expanded = expanded && !ctx.nested ? null : task.id;
+        this.expandedChild = null;
+        this.render();
+      });
     }
     if (ctx.showProject) meta.createSpan({ cls: "dida-task-project", text: this.plugin.store.projectName(task.projectId) });
     if (task.status === 2 && task.completedTime) {
@@ -1476,10 +1546,27 @@ export class DidaPanelView extends ItemView {
     const more = this.iconButton(actions, "more-horizontal", "更多", () => this.openTaskActions(task, ctx, more.getBoundingClientRect()));
     row.addEventListener("contextmenu", (e) => {
       e.preventDefault();
+      // 子任务行嵌在父任务卡片里，别让右键冒泡到父任务再开一次
+      e.stopPropagation();
       this.openTaskActions(task, ctx, new DOMRect(e.clientX, e.clientY, 0, 0));
     });
 
     if (expanded) this.renderDetails(row, task, ctx);
+  }
+
+  /** 父任务卡片里的子任务列表：每行就是完整的任务行，勾选、展开、编辑、右键都和普通任务一样。 */
+  private renderSubtaskList(details: HTMLElement, card: HTMLElement, task: DidaTask, ctx: TaskRenderContext): void {
+    const children = this.plugin.store.childrenOf(task.id);
+    if (!children.length) return;
+    const list = details.createDiv({ cls: "dida-subtasks" });
+    for (const child of children) this.renderTask(list, child, { ...ctx, card: false, nested: true });
+    // 在子任务上按下时暂停父卡片的拖拽，免得想选文字或点子任务却拖走了整张卡
+    list.addEventListener("mousedown", () => (card.draggable = false));
+    const restore = (): void => {
+      card.draggable = task.status !== 2;
+    };
+    list.addEventListener("mouseup", restore);
+    list.addEventListener("mouseleave", restore);
   }
 
   /**
@@ -1503,7 +1590,8 @@ export class DidaPanelView extends ItemView {
       const title = input.value.trim();
       if (!title || busy) return;
       busy = true;
-      input.disabled = true;
+      input.readOnly = true;
+      this.subtaskFocus = task.id;
       try {
         await this.plugin.store.createTask({
           title,
@@ -1514,13 +1602,12 @@ export class DidaPanelView extends ItemView {
           tags: [],
           content: ""
         });
-        this.subtaskFocus = task.id;
         input.value = "";
       } catch (error) {
         new Notice(`添加子任务失败：${this.plugin.describeError(error)}`, 6000);
       } finally {
         busy = false;
-        input.disabled = false;
+        input.readOnly = false;
         input.focus();
       }
     });
@@ -1539,44 +1626,19 @@ export class DidaPanelView extends ItemView {
     } else if (task.desc?.trim()) {
       details.createDiv({ cls: "dida-md", text: task.desc });
     }
-    if (task.status !== 2) this.renderSubtaskInput(details, task);
-    const actions = details.createDiv({ cls: "dida-detail-actions" });
-    if (task.status !== 2) {
-      const queued = isQueued(task, this.plugin.settings.aiTag);
-      const target = targetInfo(this.plugin.settings.aiTarget).label;
-      actions.createEl("button", { text: `${queued ? "再派给" : "派给"} ${target}`, cls: "is-dispatch" }).addEventListener("click", () => void this.plugin.dispatchTask(task));
-      const other = actions.createEl("button", { cls: "is-dispatch-more", attr: { "aria-label": "派给别的 AI" } });
-      setIcon(other, "chevron-down");
-      other.addEventListener("click", () => this.openDispatchPicker(task, other.getBoundingClientRect()));
-      if (queued) actions.createEl("button", { text: "移出队列" }).addEventListener("click", () => void this.plugin.undispatchTask(task));
-    }
-    if (ctx.columns?.length) {
-      const next = ctx.columns[ctx.columns.findIndex((c) => c.id === task.columnId) + 1];
-      if (next) actions.createEl("button", { text: `移到${next.name}` }).addEventListener("click", () => void this.moveToColumn(task, next));
-    }
-    actions.createEl("button", { text: "编辑" }).addEventListener("click", () => this.plugin.openEditModal(task));
-    actions.createEl("button", { text: "改日期" }).addEventListener("click", (e) => this.showActions(anchorOf(e), this.dateActions(task)));
-    actions.createEl("button", { text: "删除", cls: "is-danger" }).addEventListener("click", () => void this.remove(task));
+    // 看板卡片里子任务收进父任务，展开时在这里列出来；列表视图里子任务本来就缩进排在父任务下面
+    if (ctx.card && !ctx.nested) this.renderSubtaskList(details, row, task, ctx);
+    if (task.status !== 2 && !task.parentId) this.renderSubtaskInput(details, task);
+    // 操作都在「⋯」面板里，这里只放内容和子任务；什么都没有就不留空白
+    if (!details.childElementCount) details.remove();
   }
 
-  private setDate(task: DidaTask, d: Date | null): void {
-    const when = d ? formatDidaDate(d, true) : CLEAR_DATE;
+  private setDate(task: DidaTask, d: Date | null, allDay = true): void {
+    const when = d ? formatDidaDate(d, allDay) : CLEAR_DATE;
     void this.plugin.store
-      .updateTask(task, { startDate: when, dueDate: when, isAllDay: true })
+      .updateTask(task, { startDate: when, dueDate: when, isAllDay: allDay })
       .catch((error: unknown) => new Notice(`改期失败：${this.plugin.describeError(error)}`));
   }
-
-  private dateActions(task: DidaTask): ActionMenuSpec {
-    const today = startOfDay(new Date());
-    const item = (icon: string, label: string, d: Date | null) => ({ icon, label, run: () => this.setDate(task, d) });
-    return {
-      groups: [
-        [item("sun", "今天", today), item("sunrise", "明天", addDays(today, 1)), item("calendar-days", "下周一", addDays(today, ((8 - today.getDay()) % 7) || 7))],
-        task.dueDate || task.startDate ? [item("calendar-x", "清除日期", null)] : []
-      ]
-    };
-  }
-
 
   /** 「派给哪个 AI」面板，同一时间只开一个。 */
   private openDispatchPicker(task: DidaTask, rect: DOMRect): void {
@@ -1607,7 +1669,7 @@ export class DidaPanelView extends ItemView {
         edit: () => this.plugin.openEditModal(task),
         openNote: (path) => void this.app.workspace.openLinkText(path, "", false),
         openWeb: () => window.open(taskWebUrl(task)),
-        setDate: (d) => this.setDate(task, d),
+        setDate: (d, allDay) => this.setDate(task, d, allDay),
         setPriority: (p) => void store.updateTask(task, { priority: p }).catch(fail),
         moveToColumn: (col) => void this.moveToColumn(task, col),
         moveToProject: () =>

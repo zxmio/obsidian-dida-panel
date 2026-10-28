@@ -37,6 +37,8 @@ export interface StoreOptions {
   completedRange: () => CompletedRange;
 }
 
+const sameData = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+
 const INBOX_PROJECT: DidaProject = {
   id: INBOX_ID,
   name: "收件箱",
@@ -87,6 +89,9 @@ export class DidaStore {
   private readonly inflight = new Map<string, Promise<unknown>>();
   /** 刚建的任务：滴答的读接口会滞后几秒，重新拉取时没返回的先补回去，见到了就移除。 */
   private readonly pendingCreated = new Map<string, { task: DidaTask; at: number }>();
+  /** 不在未完成缓存里的子任务查过之后的状态；没查过的不在表里 */
+  private readonly childState = new Map<string, "done" | "gone" | "open">();
+  private readonly childFetching = new Set<string>();
 
   private readonly api: DidaApi;
   private readonly options: StoreOptions;
@@ -179,9 +184,11 @@ export class DidaStore {
       const bundle = await this.api.getProjectWithTasks(key);
       const snapshot: ProjectSnapshot = { ...bundle, tasks: this.withPending(bundle.tasks, (t) => this.projectKey(t.projectId) === key), fetchedAt: Date.now() };
       if (key === INBOX_ID) snapshot.project = { ...snapshot.project, id: INBOX_ID, name: "收件箱" };
+      const prev = this.projectCache.get(key);
       this.projectCache.set(key, snapshot);
       this.lastRefreshAt = Date.now();
-      this.emit();
+      // 后台对账拉回来的和手上一样就不重画，免得面板闪一下
+      if (!prev || !sameData([prev.project, prev.columns, prev.tasks], [snapshot.project, snapshot.columns, snapshot.tasks])) this.emit();
       return snapshot;
     });
   }
@@ -198,6 +205,7 @@ export class DidaStore {
         completedFrom ? this.api.listCompletedTasks(completedFrom, addDays(startOfDay(now), 1)).catch(() => [] as DidaTask[]) : Promise.resolve([] as DidaTask[])
       ]);
       const todayIds = new Set(today.map((t) => t.id));
+      const prev = this.today;
       this.today = {
         today: this.withPending(today, (t) => describeDue(t).state === "today"),
         overdue: overdue.filter((t) => !todayIds.has(t.id)),
@@ -205,7 +213,7 @@ export class DidaStore {
         fetchedAt: Date.now()
       };
       this.lastRefreshAt = Date.now();
-      this.emit();
+      if (!prev || !sameData([prev.today, prev.overdue, prev.completed], [this.today.today, this.today.overdue, this.today.completed])) this.emit();
       return this.today;
     });
   }
@@ -248,11 +256,6 @@ export class DidaStore {
     this.emit();
   }
 
-  private invalidateProject(id: string | null | undefined): void {
-    if (id) this.projectCache.delete(this.projectKey(id));
-    this.today = null;
-    this.overview = null;
-  }
 
   private removeLocally(taskId: string): void {
     this.pendingCreated.delete(taskId);
@@ -266,6 +269,15 @@ export class DidaStore {
     }
   }
 
+  /** 刚建好的任务先放进手上的缓存，不等重拉就能看到。 */
+  private insertLocally(task: DidaTask): void {
+    const has = (list: DidaTask[]): boolean => list.some((t) => t.id === task.id);
+    const snap = this.projectCache.get(this.projectKey(task.projectId));
+    if (snap && !has(snap.tasks)) snap.tasks = [...snap.tasks, task];
+    if (this.today && describeDue(task).state === "today" && !has(this.today.today)) this.today = { ...this.today, today: [...this.today.today, task] };
+    if (this.overview && !has(this.overview.tasks)) this.overview = { ...this.overview, tasks: [...this.overview.tasks, task] };
+  }
+
   private replaceLocally(task: DidaTask): void {
     if (this.pendingCreated.has(task.id)) this.pendingCreated.set(task.id, { task, at: Date.now() });
     const swap = (list: DidaTask[]): DidaTask[] => list.map((t) => (t.id === task.id ? task : t));
@@ -274,6 +286,50 @@ export class DidaStore {
       this.today = { ...this.today, today: swap(this.today.today), overdue: swap(this.today.overdue) };
     }
     if (this.overview) this.overview = { ...this.overview, tasks: swap(this.overview.tasks) };
+  }
+
+  /**
+   * 子任务进度。滴答删掉子任务后，父任务的 childIds 里还留着它的 id（2026-10-28 用真实数据确认：
+   * id 还在，按 id 去取返回 task not found），所以不能直接拿 childIds 的长度当总数。
+   * 未完成的从缓存里数；缓存里没有的 id 在后台逐个查一次，记下是已完成、已删除还是在别处未完成，查到后重画。
+   */
+  subtaskProgress(task: DidaTask): { done: number; total: number } {
+    const open = this.childrenOf(task.id);
+    const openIds = new Set(open.map((t) => t.id));
+    let done = 0;
+    let total = open.length;
+    const unknown: string[] = [];
+    for (const id of task.childIds ?? []) {
+      if (openIds.has(id)) continue;
+      const state = this.childState.get(id);
+      if (state === "done") {
+        done += 1;
+        total += 1;
+      } else if (state === "open") total += 1;
+      else if (state === undefined) unknown.push(id);
+    }
+    if (unknown.length) void this.resolveChildren(task.id, unknown);
+    return { done, total };
+  }
+
+  private async resolveChildren(parentId: string, ids: string[]): Promise<void> {
+    const todo = ids.filter((id) => !this.childFetching.has(id));
+    if (!todo.length) return;
+    for (const id of todo) this.childFetching.add(id);
+    await Promise.all(
+      todo.map(async (id) => {
+        try {
+          const t = await this.api.getTask(id);
+          // 挂到别的父任务下、或已经转成独立任务的，也不再算这个父任务的
+          this.childState.set(id, t.parentId !== parentId ? "gone" : t.status === 2 ? "done" : "open");
+        } catch (error) {
+          if (/not[_ ]found|没有找到/i.test(error instanceof Error ? error.message : String(error))) this.childState.set(id, "gone");
+        } finally {
+          this.childFetching.delete(id);
+        }
+      })
+    );
+    this.emit();
   }
 
   /** 某条任务未完成的子任务，从各处缓存（含刚建还没读到的）里收集、去重。 */
@@ -308,12 +364,17 @@ export class DidaStore {
     return (this.overview?.tasks ?? []).filter((t) => (t.tags ?? []).includes(tag));
   }
 
-  /** 变更后在后台重新拉受影响的数据，面板会随之刷新。 */
+  /**
+   * 变更后在后台重新拉受影响的数据。旧数据留着照常显示，拉回来有变化才重画；
+   * 先清缓存再拉的话，中间那一下面板是空的，看起来像整页刷新。
+   */
   private reloadAffected(projectIds: Array<string | null | undefined>): void {
-    for (const id of projectIds) this.invalidateProject(id);
+    // 总览是一次全量查询，不在这里跟着拉，只标成过期，下次打开总览时重拉
+    if (this.overview) this.overview = { ...this.overview, fetchedAt: 0 };
     void Promise.all([
       ...projectIds.filter((id): id is string => !!id).map((id) => this.loadProject(id, true).catch(() => null)),
-      this.loadToday(true).catch(() => null)
+      // 今天没打开过就不拉，等切到今天时再拉
+      this.today ? this.loadToday(true).catch(() => null) : null
     ]);
   }
 
@@ -321,6 +382,8 @@ export class DidaStore {
     const created = await this.api.createTask(input);
     const task: DidaTask = { ...created, columnId: created.columnId ?? input.columnId ?? null };
     this.pendingCreated.set(task.id, { task, at: Date.now() });
+    this.insertLocally(task);
+    this.emit();
     this.reloadAffected([input.projectId]);
     // 第一次重拉多半还读不到新任务，过几秒再对一次账
     setTimeout(() => this.reloadAffected([input.projectId]), 4000);
@@ -347,6 +410,7 @@ export class DidaStore {
   }
 
   async completeTask(task: DidaTask): Promise<void> {
+    if (task.parentId) this.childState.set(task.id, "done");
     this.removeLocally(task.id);
     this.emit();
     try {
@@ -357,6 +421,7 @@ export class DidaStore {
   }
 
   async deleteTask(task: DidaTask): Promise<void> {
+    if (task.parentId) this.childState.set(task.id, "gone");
     this.removeLocally(task.id);
     this.emit();
     try {

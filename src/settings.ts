@@ -19,6 +19,8 @@ export interface DidaSettings {
   defaultProjectId: string;
   defaultView: PanelTab;
   lastProjectId: string | null;
+  /** 置顶到顶部页签栏的项目，按置顶先后排 */
+  pinnedProjects: string[];
   refreshMinutes: number;
   openOnStartup: boolean;
   vaultName: string;
@@ -43,6 +45,7 @@ export const DEFAULT_SETTINGS: DidaSettings = {
   defaultProjectId: INBOX_ID,
   defaultView: "today",
   lastProjectId: null,
+  pinnedProjects: [],
   refreshMinutes: 5,
   openOnStartup: false,
   vaultName: "",
