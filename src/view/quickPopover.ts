@@ -37,6 +37,9 @@ export interface QuickPopoverOptions {
   trigger?: HTMLElement;
 }
 
+/** 按钮上下剩的空间小于这个高度，就不贴着按钮放了，压得太矮没法用 */
+const MIN_ROOM = 240;
+
 /**
  * 锚在快捷按钮下方的弹出面板：上下键移动、回车选择、Esc 关闭、点外面关闭。
  * 内容由调用方渲染，选完后调 refresh() 重画（多选）或 close()（单选）。
@@ -216,12 +219,16 @@ export class QuickPopover {
     }
   }
 
-  /** 摆在按钮下方，下方放不下就翻到上方。 */
+  /**
+   * 摆在按钮下方，下方放不下就翻到上方；两边都放不下，放到空间大的那边并压低高度，
+   * 内容在面板里滚动（不压的话面板底部会伸出窗口，最下面的删除点不到）。
+   */
   private place(): void {
     const win = this.el.win;
     const rect = this.anchorRect;
+    this.el.style.maxHeight = "";
     const width = this.el.offsetWidth;
-    const height = this.el.offsetHeight;
+    let height = this.el.offsetHeight;
     if (this.opts.parent) {
       // 二级面板放在父面板右边、和触发它的那一行对齐；右边放不下放左边
       const pr = this.opts.parent.el.getBoundingClientRect();
@@ -233,7 +240,20 @@ export class QuickPopover {
     }
     const left = Math.max(8, Math.min(rect.left, win.innerWidth - width - 8));
     const below = rect.bottom + 4;
-    const top = below + height > win.innerHeight - 8 && rect.top - height - 4 > 8 ? rect.top - height - 4 : below;
+    const roomBelow = win.innerHeight - 8 - below;
+    const roomAbove = rect.top - 4 - 8;
+    let top: number;
+    if (height <= roomBelow) top = below;
+    else if (height <= roomAbove) top = rect.top - 4 - height;
+    else if (Math.max(roomBelow, roomAbove) >= MIN_ROOM) {
+      const up = roomAbove > roomBelow;
+      this.el.style.maxHeight = `${up ? roomAbove : roomBelow}px`;
+      height = this.el.offsetHeight;
+      top = up ? rect.top - 4 - height : below;
+    } else {
+      // 按钮上下都太挤：整块放进窗口里，盖住按钮也行
+      top = Math.max(8, win.innerHeight - 8 - height);
+    }
     this.el.style.left = `${left}px`;
     this.el.style.top = `${top}px`;
   }
