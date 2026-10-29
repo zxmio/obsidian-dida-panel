@@ -16,7 +16,7 @@ function fakeApi(columns, tasks = []) {
   };
 }
 
-const options = { hideSeparators: () => true, completedRange: () => "none" };
+const options = { hideSeparators: () => true, completedRange: () => "none", showCompleted: () => false };
 
 test("新建分组排在最后，并立刻出现在本地缓存里", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
@@ -134,4 +134,26 @@ test("分组插入位置：左边、右边取中点，两端外推，找不到�
   assert.equal(columnSortOrder(cols, { after: "c" }), 300 + 2 ** 40);
   assert.equal(columnSortOrder(cols, {}), 300 + 2 ** 40);
   assert.equal(columnSortOrder([], {}), undefined);
+});
+
+test("显示已完成：只留本项目的，按完成时间倒序；关着时不去拉", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const api = fakeApi([]);
+  let asked = 0;
+  api.listCompletedTasks = async () => {
+    asked += 1;
+    return [
+      { id: "d1", projectId: "p1", title: "早", status: 2, completedTime: "2026-10-20T08:00:00.000+0000" },
+      { id: "d2", projectId: "p2", title: "别的项目", status: 2, completedTime: "2026-10-27T08:00:00.000+0000" },
+      { id: "d3", projectId: "p1", title: "晚", status: 2, completedTime: "2026-10-26T08:00:00.000+0000" }
+    ];
+  };
+  let show = false;
+  const store = new DidaStore(api, { ...options, showCompleted: () => show });
+  await store.loadProject("p1");
+  assert.equal(asked, 0);
+  assert.deepEqual(store.getProject("p1").completed, []);
+  show = true;
+  await store.loadProject("p1", true);
+  assert.deepEqual(store.getProject("p1").completed.map((x) => x.id), ["d3", "d1"]);
 });

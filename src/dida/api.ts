@@ -151,11 +151,11 @@ export class DidaApi {
       });
   }
 
-  async listCompletedTasks(from: Date, to: Date): Promise<DidaTask[]> {
-    const raw = await this.client.callTool("list_completed_tasks_by_date", {
-      client_timezone: this.tz,
-      search: { startDate: formatDidaDate(from, false), endDate: formatDidaDate(to, false) }
-    });
+  /** projectIds 只是让接口少返回点，调用方仍要自己按项目过滤（接口不一定认这个字段） */
+  async listCompletedTasks(from: Date, to: Date, projectIds?: string[]): Promise<DidaTask[]> {
+    const search: Record<string, unknown> = { startDate: formatDidaDate(from, false), endDate: formatDidaDate(to, false) };
+    if (projectIds?.length) search.projectIds = projectIds;
+    const raw = await this.client.callTool("list_completed_tasks_by_date", { client_timezone: this.tz, search });
     return asArray(raw).map(normalizeTask);
   }
 

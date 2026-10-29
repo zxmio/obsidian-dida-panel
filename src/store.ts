@@ -5,6 +5,8 @@ import { INBOX_ID, isInboxId, type DidaColumn, type DidaProject, type DidaProjec
 export interface ProjectSnapshot {
   project: DidaProject;
   tasks: DidaTask[];
+  /** 近 30 天完成的，只在打开「显示已完成」时拉 */
+  completed: DidaTask[];
   columns: DidaColumn[];
   fetchedAt: number;
 }
@@ -35,6 +37,7 @@ export interface OverviewSnapshot {
 export interface StoreOptions {
   hideSeparators: () => boolean;
   completedRange: () => CompletedRange;
+  showCompleted: () => boolean;
 }
 
 const sameData = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
@@ -181,14 +184,23 @@ export class DidaStore {
     const cached = this.projectCache.get(key);
     if (!force && cached && Date.now() - cached.fetchedAt < 60_000) return cached;
     return this.dedupe(`project:${key}`, async () => {
-      const bundle = await this.api.getProjectWithTasks(key);
-      const snapshot: ProjectSnapshot = { ...bundle, tasks: this.withPending(bundle.tasks, (t) => this.projectKey(t.projectId) === key), fetchedAt: Date.now() };
+      const now = new Date();
+      const [bundle, done] = await Promise.all([
+        this.api.getProjectWithTasks(key),
+        this.options.showCompleted()
+          ? this.api.listCompletedTasks(addDays(startOfDay(now), -30), addDays(startOfDay(now), 1), [key]).catch(() => [] as DidaTask[])
+          : Promise.resolve([] as DidaTask[])
+      ]);
+      const completed = done
+        .filter((t) => this.projectKey(t.projectId) === key)
+        .sort((a, b) => (b.completedTime ?? "").localeCompare(a.completedTime ?? ""));
+      const snapshot: ProjectSnapshot = { ...bundle, tasks: this.withPending(bundle.tasks, (t) => this.projectKey(t.projectId) === key), completed, fetchedAt: Date.now() };
       if (key === INBOX_ID) snapshot.project = { ...snapshot.project, id: INBOX_ID, name: "收件箱" };
       const prev = this.projectCache.get(key);
       this.projectCache.set(key, snapshot);
       this.lastRefreshAt = Date.now();
       // 后台对账拉回来的和手上一样就不重画，免得面板闪一下
-      if (!prev || !sameData([prev.project, prev.columns, prev.tasks], [snapshot.project, snapshot.columns, snapshot.tasks])) this.emit();
+      if (!prev || !sameData([prev.project, prev.columns, prev.tasks, prev.completed], [snapshot.project, snapshot.columns, snapshot.tasks, snapshot.completed])) this.emit();
       return snapshot;
     });
   }
@@ -412,6 +424,8 @@ export class DidaStore {
   async completeTask(task: DidaTask): Promise<void> {
     if (task.parentId) this.childState.set(task.id, "done");
     this.removeLocally(task.id);
+    const snap = this.projectCache.get(this.projectKey(task.projectId));
+    if (snap && this.options.showCompleted()) snap.completed = [{ ...task, status: 2, completedTime: new Date().toISOString() }, ...snap.completed];
     this.emit();
     try {
       await this.api.completeTask(task);

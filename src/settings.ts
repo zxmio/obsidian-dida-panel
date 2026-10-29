@@ -28,6 +28,10 @@ export interface DidaSettings {
   vaultName: string;
   hideSeparators: boolean;
   completedRange: CompletedRange;
+  /** 项目、收件箱里显示近 30 天已完成的任务（今天页签按 completedRange） */
+  showCompleted: boolean;
+  /** 面板底部的 AI 对话框 */
+  showChat: boolean;
   /** 派给 AI：默认去处、Claude Code / Codex 的工作目录（空=vault）、队列标签、指令模板、是否新建会话 */
   aiTarget: DispatchTarget;
   aiWorkdir: string;
@@ -54,6 +58,8 @@ export const DEFAULT_SETTINGS: DidaSettings = {
   vaultName: "",
   hideSeparators: true,
   completedRange: "today",
+  showCompleted: false,
+  showChat: true,
   aiTarget: "makerpilot",
   aiWorkdir: "",
   aiTag: "派给AI",

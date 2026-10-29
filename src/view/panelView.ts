@@ -59,6 +59,8 @@ interface LaneSpec {
   /** 能不能把这张卡拖进来；不给就不接受拖放 */
   accepts?: (task: DidaTask) => boolean;
   onDrop?: (task: DidaTask) => void;
+  /** 已完成的卡片，排在添加行下面（打开「显示已完成」时才有） */
+  done?: DidaTask[];
   /** 泳道没有任务、也没有添加行时的提示 */
   emptyText?: string;
   /** 泳道「···」和右键：分组操作面板 */
@@ -116,6 +118,7 @@ export class DidaPanelView extends ItemView {
   private dragging: DidaTask | null = null;
   private mainEl: HTMLElement | null = null;
   private dock: ChatDock | null = null;
+  private dockHost: HTMLElement | null = null;
   /** 多选模式：点任务是选中而不是展开，底部出批量操作栏；⌘ / Ctrl 点任务也会进入 */
   private selecting = false;
   private readonly selected = new Map<string, DidaTask>();
@@ -160,7 +163,9 @@ export class DidaPanelView extends ItemView {
     this.contentEl.empty();
     this.contentEl.addClass("dida-host");
     this.mainEl = this.contentEl.createDiv({ cls: "dida-panel" });
-    const dockHost = this.contentEl.createDiv();
+    const dockHost = this.contentEl.createDiv({ cls: "dida-dock-host" });
+    this.dockHost = dockHost;
+    dockHost.toggleClass("is-hidden", !this.plugin.settings.showChat);
     this.dock = new ChatDock(
       this.plugin,
       dockHost,
@@ -419,6 +424,21 @@ export class DidaPanelView extends ItemView {
     this.dock?.refreshContext();
   }
 
+  async toggleCompleted(): Promise<void> {
+    this.plugin.settings.showCompleted = !this.plugin.settings.showCompleted;
+    await this.plugin.saveSettings();
+    this.plugin.store.invalidateAll();
+    await this.refresh(true);
+  }
+
+  async toggleChat(): Promise<void> {
+    const show = !this.plugin.settings.showChat;
+    this.plugin.settings.showChat = show;
+    await this.plugin.saveSettings();
+    if (!show) this.dock?.collapse();
+    this.dockHost?.toggleClass("is-hidden", !show);
+  }
+
   private renderHeader(root: HTMLElement): void {
     const header = root.createDiv({ cls: "dida-header" });
     header.createSpan({ cls: "dida-header-title", text: "滴答清单" });
@@ -437,6 +457,10 @@ export class DidaPanelView extends ItemView {
             { icon: "folder-plus", label: "新建项目…", run: () => this.openNewProject() },
             { icon: "list-checks", label: this.selecting ? "退出多选" : "多选（批量操作）", run: () => (this.selecting ? this.exitSelecting() : this.enterSelecting()) },
             { icon: "tags", label: "管理标签…", run: () => this.plugin.openTagManager() }
+          ],
+          [
+            { icon: "circle-check", label: "显示已完成", hint: "项目和收件箱，近 30 天", checked: this.plugin.settings.showCompleted, run: () => void this.toggleCompleted() },
+            { icon: "message-square", label: "AI 对话框", checked: this.plugin.settings.showChat, run: () => void this.toggleChat() }
           ],
           [
             { icon: "settings", label: "插件设置", run: () => this.plugin.openSettings() },
@@ -1210,9 +1234,10 @@ export class DidaPanelView extends ItemView {
     const snap = this.plugin.store.getProject(projectId);
     if (!snap) return;
     const tasks = this.filteredTasks(snap);
+    const done = this.filterTag ? snap.completed.filter((t) => (t.tags ?? []).includes(this.filterTag ?? "")) : snap.completed;
 
     if (snap.columns.length && boardMode) {
-      this.renderBoard(body, projectId, snap, tasks);
+      this.renderBoard(body, projectId, snap, tasks, done);
       return;
     }
 
@@ -1247,6 +1272,7 @@ export class DidaPanelView extends ItemView {
         this.renderGhost(body, `添加到${col.name}`, { projectId, columnId: col.id });
       }
       this.renderNewColumn(body, projectId);
+      this.renderDoneGroup(body, projectId, done, ctx);
       return;
     }
 
@@ -1254,6 +1280,14 @@ export class DidaPanelView extends ItemView {
     for (const t of tasks) this.renderTask(body, t, ctx);
     this.renderGhost(body, `添加到${this.plugin.store.projectName(projectId)}`, { projectId });
     this.renderNewColumn(body, projectId);
+    this.renderDoneGroup(body, projectId, done, ctx);
+  }
+
+  /** 列表视图最后的「已完成」分组，按完成时间倒序；只在打开「显示已完成」时出现 */
+  private renderDoneGroup(body: HTMLElement, projectId: string, done: DidaTask[], ctx: TaskRenderContext): void {
+    if (!this.plugin.settings.showCompleted || !done.length) return;
+    const { open } = this.renderGroup(body, `done:${projectId}`, "已完成 · 近 30 天", done.length, "is-muted");
+    if (open) for (const t of done) this.renderTask(body, t, ctx);
   }
 
   /** 分组操作：重命名、在两侧添加、移动、删除。列表视图里说「上方 / 下方」，看板里说「左侧 / 右侧」。 */
@@ -1441,13 +1475,15 @@ export class DidaPanelView extends ItemView {
 
   // ---------- 看板 ----------
 
-  private renderBoard(body: HTMLElement, projectId: string, snap: ProjectSnapshot, tasks: DidaTask[]): void {
+  private renderBoard(body: HTMLElement, projectId: string, snap: ProjectSnapshot, tasks: DidaTask[], done: DidaTask[]): void {
     const byColumn = this.groupByColumn(snap, tasks);
+    const doneByColumn = this.groupByColumn(snap, done);
     const ctx: TaskRenderContext = { showProject: false, columns: snap.columns, card: true };
     const lanes: LaneSpec[] = snap.columns.map((col) => ({
       key: col.id,
       name: col.name,
       tasks: byColumn.get(col.id) ?? [],
+      done: doneByColumn.get(col.id),
       ctx,
       addPrefill: { projectId, columnId: col.id },
       accepts: (t: DidaTask) => t.columnId !== col.id,
@@ -1455,7 +1491,8 @@ export class DidaPanelView extends ItemView {
       menu: (rect: DOMRect) => this.showActions(rect, this.columnActions(projectId, col, (byColumn.get(col.id) ?? []).length, "board", rect))
     }));
     const rest = byColumn.get("__none__") ?? [];
-    if (rest.length) lanes.unshift({ key: "__none__", name: "未分组", tasks: rest, ctx, addPrefill: { projectId, columnId: null } });
+    const restDone = doneByColumn.get("__none__") ?? [];
+    if (rest.length || restDone.length) lanes.unshift({ key: "__none__", name: "未分组", tasks: rest, done: restDone, ctx, addPrefill: { projectId, columnId: null } });
     const board = this.renderLanes(body, lanes);
     this.renderNewColumn(board, projectId, "is-lane");
   }
@@ -1497,7 +1534,8 @@ export class DidaPanelView extends ItemView {
       const tops = spec.tasks.filter((t) => !(t.parentId && ids.has(t.parentId)));
       for (const t of tops) this.renderTask(cards, t, spec.ctx);
       if (prefill) addInput = this.renderLaneAdd(cards, spec.key, spec.name, prefill);
-      else if (!spec.tasks.length) cards.createDiv({ cls: "dida-lane-empty", text: spec.emptyText ?? "暂无待办" });
+      else if (!spec.tasks.length && !spec.done?.length) cards.createDiv({ cls: "dida-lane-empty", text: spec.emptyText ?? "暂无待办" });
+      for (const t of spec.done ?? []) this.renderTask(cards, t, spec.ctx);
 
       const accepts = spec.accepts;
       const onDrop = spec.onDrop;

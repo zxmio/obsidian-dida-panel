@@ -233,10 +233,16 @@
   align-items: center;
   gap: 2px;
 }
+/* flex: none + padding: 0：范围标签很长时不会把按钮挤窄，Obsidian 按钮自带的左右内边距也不再吃掉图标的位置 */
 .dida-dock button.dida-chat-nav-btn,
 .dida-dock button.dida-toolbar-btn {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
   width: 30px;
   height: 30px;
+  padding: 0;
   border-radius: var(--dida-r-sm);
 }
 .dida-dock button.dida-chat-nav-btn:hover,
@@ -246,6 +252,7 @@
 }
 .dida-dock button.dida-chat-nav-btn svg,
 .dida-dock button.dida-toolbar-btn svg {
+  flex: none;
   width: 16px;
   height: 16px;
 }
@@ -1686,6 +1693,8 @@ button.dida-qchip .dida-qchip-clear:hover {
 /* 任务「更多」操作面板 */
 .dida-pop.is-task-actions {
   width: 288px;
+  /* 操作面板要一眼看全，不设 540 的上限，只有窗口本身比它矮才滚动 */
+  max-height: calc(100vh - 16px);
 }
 .dida-ta-quick {
   display: grid;
@@ -2594,6 +2603,20 @@ button.dida-group-action:hover {
   background: var(--dida-accent-soft);
   box-shadow: inset 0 0 0 1px var(--dida-accent-line);
   color: var(--dida-accent-strong);
+}
+/* 看板的两条滚动条：平时完全透明，鼠标放到看板 / 泳道上才露出一条细线。
+   用标准属性而不是 ::-webkit-scrollbar：设了 scrollbar-color 后 Chromium 会忽略 webkit 伪元素，Obsidian 两种滚动条模式都压得住 */
+.dida-board,
+.dida-lane-cards {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.dida-board:hover,
+.dida-lane-cards:hover {
+  scrollbar-color: var(--dida-check-line) transparent;
+}
+.dida-dock-host.is-hidden {
+  display: none;
 }
 .dida-board {
   flex: 1;

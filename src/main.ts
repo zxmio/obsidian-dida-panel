@@ -47,7 +47,8 @@ export default class DidaPanelPlugin extends Plugin {
     this.api = new DidaApi(this.client);
     this.store = new DidaStore(this.api, {
       hideSeparators: () => this.settings.hideSeparators,
-      completedRange: () => this.settings.completedRange
+      completedRange: () => this.settings.completedRange,
+      showCompleted: () => this.settings.showCompleted
     });
 
     this.registerView(VIEW_TYPE_DIDA, (leaf) => new DidaPanelView(leaf, this));

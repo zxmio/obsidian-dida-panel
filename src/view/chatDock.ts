@@ -102,6 +102,11 @@ export class ChatDock {
   }
 
   /** 面板切换页签或项目时调用，让底栏的范围胶囊跟着变。 */
+  /** 隐藏对话框前调：对话模式先退出，不然清单会一直藏着 */
+  collapse(): void {
+    if (this.open) this.setOpen(false);
+  }
+
   refreshContext(): void {
     if (!this.scopeEl) return;
     const ctx = this.context();

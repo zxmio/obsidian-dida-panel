@@ -37,9 +37,6 @@ export interface QuickPopoverOptions {
   trigger?: HTMLElement;
 }
 
-/** 按钮上下剩的空间小于这个高度，就不贴着按钮放了，压得太矮没法用 */
-const MIN_ROOM = 240;
-
 /**
  * 锚在快捷按钮下方的弹出面板：上下键移动、回车选择、Esc 关闭、点外面关闭。
  * 内容由调用方渲染，选完后调 refresh() 重画（多选）或 close()（单选）。
@@ -220,15 +217,14 @@ export class QuickPopover {
   }
 
   /**
-   * 摆在按钮下方，下方放不下就翻到上方；两边都放不下，放到空间大的那边并压低高度，
-   * 内容在面板里滚动（不压的话面板底部会伸出窗口，最下面的删除点不到）。
+   * 摆在按钮下方，下方放不下就翻到上方；上下都放不下，挪到按钮旁边，上下整块收进窗口，
+   * 保证整个面板一眼看全、最下面的删除点得到，不在面板里滚动。
    */
   private place(): void {
     const win = this.el.win;
     const rect = this.anchorRect;
-    this.el.style.maxHeight = "";
     const width = this.el.offsetWidth;
-    let height = this.el.offsetHeight;
+    const height = this.el.offsetHeight;
     if (this.opts.parent) {
       // 二级面板放在父面板右边、和触发它的那一行对齐；右边放不下放左边
       const pr = this.opts.parent.el.getBoundingClientRect();
@@ -238,21 +234,16 @@ export class QuickPopover {
       this.el.style.top = `${Math.max(8, Math.min(rect.top - 8, win.innerHeight - height - 8))}px`;
       return;
     }
-    const left = Math.max(8, Math.min(rect.left, win.innerWidth - width - 8));
+    let left = Math.max(8, Math.min(rect.left, win.innerWidth - width - 8));
     const below = rect.bottom + 4;
-    const roomBelow = win.innerHeight - 8 - below;
-    const roomAbove = rect.top - 4 - 8;
     let top: number;
-    if (height <= roomBelow) top = below;
-    else if (height <= roomAbove) top = rect.top - 4 - height;
-    else if (Math.max(roomBelow, roomAbove) >= MIN_ROOM) {
-      const up = roomAbove > roomBelow;
-      this.el.style.maxHeight = `${up ? roomAbove : roomBelow}px`;
-      height = this.el.offsetHeight;
-      top = up ? rect.top - 4 - height : below;
-    } else {
-      // 按钮上下都太挤：整块放进窗口里，盖住按钮也行
-      top = Math.max(8, win.innerHeight - 8 - height);
+    if (below + height <= win.innerHeight - 8) top = below;
+    else if (rect.top - 4 - height >= 8) top = rect.top - 4 - height;
+    else {
+      // 按钮旁边：优先左边（「⋯」多在卡片右上角），左边放不下放右边，都不行就盖住按钮
+      if (rect.left - 6 - width >= 8) left = rect.left - 6 - width;
+      else if (rect.right + 6 + width <= win.innerWidth - 8) left = rect.right + 6;
+      top = Math.max(8, Math.min(rect.top, win.innerHeight - 8 - height));
     }
     this.el.style.left = `${left}px`;
     this.el.style.top = `${top}px`;
