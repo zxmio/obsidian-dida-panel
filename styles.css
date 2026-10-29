@@ -2604,16 +2604,17 @@ button.dida-group-action:hover {
   box-shadow: inset 0 0 0 1px var(--dida-accent-line);
   color: var(--dida-accent-strong);
 }
-/* 看板的两条滚动条：平时完全透明，鼠标放到看板 / 泳道上才露出一条细线。
-   用标准属性而不是 ::-webkit-scrollbar：设了 scrollbar-color 后 Chromium 会忽略 webkit 伪元素，Obsidian 两种滚动条模式都压得住 */
-.dida-board,
-.dida-lane-cards {
+/* 看板横向滚动条：平时完全透明，鼠标放到看板上才露出一条细线；泳道竖向滚动不要滚动条。
+   用标准属性而不是 ::-webkit-scrollbar：设了 scrollbar-color / scrollbar-width 后 Chromium 会忽略 webkit 伪元素，Obsidian 两种滚动条模式都压得住 */
+.dida-board {
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;
 }
-.dida-board:hover,
-.dida-lane-cards:hover {
+.dida-board:hover {
   scrollbar-color: var(--dida-check-line) transparent;
+}
+.dida-lane-cards {
+  scrollbar-width: none;
 }
 .dida-dock-host.is-hidden {
   display: none;
